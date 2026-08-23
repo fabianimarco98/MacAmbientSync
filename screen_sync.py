@@ -189,7 +189,13 @@ def load_config():
     
     # If the user hasn't created a config yet, create a default one from example if it exists
     if not config_path.exists():
-        example_path = Path(__file__).parent / "config.example.yaml"
+        import sys
+        if getattr(sys, 'frozen', False):
+            # Py2app environment
+            example_path = Path(sys.executable).parent.parent / "Resources" / "config.example.yaml"
+        else:
+            example_path = Path(__file__).parent / "config.example.yaml"
+            
         if example_path.exists():
             import shutil
             shutil.copy(example_path, config_path)
