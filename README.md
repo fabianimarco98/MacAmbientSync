@@ -1,46 +1,49 @@
-# Mac Screen Ambient Sync for Home Assistant
+# MacAmbientSync
 
-Cattura lo schermo del Mac in tempo reale, calcola il colore dominante o medio della scena (con saturazione cinematografica e rimozione delle bande nere) e sincronizza una lampada RGB o strip LED collegata a Home Assistant. Ottimizzato per avere un carico quasi nullo sulla CPU del Mac.
+MacAmbientSync è una comoda App per macOS (con icona nella barra dei menu) che cattura lo schermo del Mac in tempo reale, calcola il colore dominante o medio della scena e sincronizza una lampada RGB o strip LED collegata a Home Assistant. Ottimizzato per avere un carico quasi nullo sulla CPU.
 
 ## Caratteristiche
 
+*   **App nativa Menu Bar**: un'icona nella barra di stato in alto a destra per avviare/fermare la sincronizzazione o modificare le impostazioni.
 *   **Bassissimo impatto CPU**: utilizza un downscaling estremo prima del calcolo del colore per garantire un utilizzo della CPU inferiore all'1%.
 *   **Colori vividi**: applica un boost della saturazione e luminosità (configurabile) per evitare effetti di luce "sbiadita".
-*   **Rimozione bande nere**: rileva e ignora in automatico il formato "letterbox" (es. film in 21:9) così il nero non altera il colore dei bordi.
-*   **Smoothing ed efficienza**: utilizza una media esponenziale per transizioni colore morbide ed evita chiamate di rete inutili ad Home Assistant se il colore varia di poco.
+*   **Rimozione bande nere**: rileva e ignora in automatico il formato "letterbox" (es. film in 21:9).
+*   **Smoothing ed efficienza**: utilizza una media esponenziale per transizioni colore morbide ed evita chiamate ad HA se il colore varia di poco.
 
-## Requisiti
+## Installazione per l'Utente Finale
 
-*   Python 3 (e un ambiente macOS)
-*   Un'istanza di Home Assistant accessibile dalla rete locale
-*   Un Long-Lived Access Token per Home Assistant
+1. Scarica e unzippa `MacAmbientSync.app` dall'ultima release.
+2. Sposta l'App nella cartella **Applicazioni**.
+3. Clicca sull'icona della tavolozza 🎨 nella barra dei menu.
+4. Clicca su **Edit Config...** per configurare:
+   * `url`: l'indirizzo del tuo Home Assistant (es. `http://192.168.1.100:8123`)
+   * `token`: il tuo Long-Lived Access Token di Home Assistant
+   * `entity_id`: l'entità della lampada (es. `light.lampada_salotto`)
+5. Clicca su **Start Sync**! L'icona diventerà 🔴 per indicare che la cattura è in corso.
 
-## Installazione e Avvio Rapido
+## Compilare l'App (Per Sviluppatori)
 
-1.  Clona il repository o scarica i file in una cartella.
-2.  Copia il file di configurazione di esempio:
+Se vuoi compilare l'app tu stesso partendo dal codice sorgente:
+
+1.  Clona il repository.
+2.  Crea un ambiente virtuale e installa le dipendenze:
     ```bash
-    cp config.example.yaml config.yaml
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+    pip install py2app
     ```
-3.  Modifica `config.yaml` inserendo:
-    *   L'indirizzo del tuo Home Assistant (`url`)
-    *   Il tuo Long-Lived Access Token (`token`)
-    *   L'identificativo della tua lampada RGB (`entity_id`)
-4.  Esegui lo script:
-    *   Fai doppio clic su `start_ambient_sync.command` (creerà automaticamente l'ambiente virtuale e avvierà la sincronizzazione).
-    *   *Oppure*, da terminale:
-        ```bash
-        python3 -m venv venv
-        source venv/bin/activate
-        pip install -r requirements.txt
-        python screen_sync.py
-        ```
+3.  Esegui il comando di build:
+    ```bash
+    python setup.py py2app
+    ```
+4.  Troverai la tua applicazione pronta nella cartella `dist/MacAmbientSync.app`.
 
 ## Configurazione Avanzata
 
-Nel file `config.yaml` è possibile regolare vari parametri:
+Nel file `config.yaml` (accessibile dal menu `Edit Config...`) è possibile regolare vari parametri:
 
-*   `fps`: Frequenza di campionamento. 3-5 Hz è spesso ottimale per evitare di sovraccaricare la rete Wi-Fi/Zigbee delle lampade.
+*   `fps`: Frequenza di campionamento. 3-5 Hz è spesso ottimale.
 *   `monitor_index`: Quale monitor catturare (utile se usi schermi esterni).
-*   `saturation_boost`: Valore > 1 per esaltare i colori e rendere l'effetto più cinematografico.
-*   `smoothing_factor`: Un valore più basso (es. 0.2) rende i passaggi molto morbidi, uno più alto (es. 0.8) reagisce istantaneamente ma può sembrare "a scatti".
+*   `saturation_boost`: Valore > 1 per esaltare i colori.
+*   `smoothing_factor`: Valore più basso (es. 0.2) per transizioni morbide, più alto (es. 0.8) per cambi rapidi.

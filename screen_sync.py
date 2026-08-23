@@ -183,17 +183,28 @@ class HomeAssistantClient:
 
 
 def load_config():
-    config_path = Path(__file__).parent / "config.yaml"
+    app_support_dir = Path.home() / "Library" / "Application Support" / "MacAmbientSync"
+    app_support_dir.mkdir(parents=True, exist_ok=True)
+    config_path = app_support_dir / "config.yaml"
+    
+    # If the user hasn't created a config yet, create a default one from example if it exists
+    if not config_path.exists():
+        example_path = Path(__file__).parent / "config.example.yaml"
+        if example_path.exists():
+            import shutil
+            shutil.copy(example_path, config_path)
+            
     if config_path.exists() and yaml:
         with open(config_path, "r", encoding="utf-8") as f:
             user_cfg = yaml.safe_load(f)
             # Merge
             cfg = DEFAULT_CONFIG.copy()
-            for k, v in user_cfg.items():
-                if isinstance(v, dict) and k in cfg:
-                    cfg[k].update(v)
-                else:
-                    cfg[k] = v
+            if user_cfg:
+                for k, v in user_cfg.items():
+                    if isinstance(v, dict) and k in cfg:
+                        cfg[k].update(v)
+                    else:
+                        cfg[k] = v
             return cfg
     return DEFAULT_CONFIG
 
