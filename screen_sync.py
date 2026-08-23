@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Mac Screen Ambient Sync -> Home Assistant
-Cattura lo schermo del Mac in tempo reale, calcola il colore dominante/medio
-della scena (con saturazione cinematografica e rimozione bande nere/letterbox)
-e sincronizza la lampada RGB su Home Assistant.
+Captures the Mac screen in real-time, calculates the dominant/average color
+of the scene (with cinematic saturation and black bar/letterbox removal)
+and synchronizes the RGB lamp in Home Assistant.
 """
 
 import colorsys
@@ -21,7 +21,7 @@ try:
     import mss
     from PIL import Image
 except ImportError:
-    print("[ERROR] Dipendenze mancanti. Installa con: pip install mss pillow pyyaml")
+    print("[ERROR] Missing dependencies. Install with: pip install mss pillow pyyaml")
     sys.exit(1)
 
 try:
@@ -41,26 +41,26 @@ logger = logging.getLogger("AmbientSync")
 DEFAULT_CONFIG = {
     "home_assistant": {
         "url": "http://192.168.X.X:8123",
-        "token": "INSERISCI_QUI_IL_TUO_LONG_LIVED_TOKEN",
-        "entity_id": "light.tua_lampada_rgb",
+        "token": "INSERT_YOUR_LONG_LIVED_TOKEN_HERE",
+        "entity_id": "light.your_rgb_lamp",
         "timeout": 1.0
     },
     "capture": {
-        "monitor_index": 1,        # 1 = Monitor Principale
-        "fps": 5,                  # 3-5 Hz è ideale per lampade Wi-Fi/Zigbee senza sovraccarico
-        "sample_width": 64,        # Downscale rapido per CPU-load quasi a zero
+        "monitor_index": 1,        # 1 = Primary Monitor
+        "fps": 5,                  # 3-5 Hz is ideal for Wi-Fi/Zigbee lamps without overload
+        "sample_width": 64,        # Fast downscale for near-zero CPU load
         "sample_height": 36,
-        "ignore_black_bars": True, # Rimuove bande nere film (letterbox)
-        "black_threshold": 20      # Luminosità minima per considerare un pixel non-nero
+        "ignore_black_bars": True, # Removes movie black bars (letterbox)
+        "black_threshold": 20      # Minimum brightness to consider a pixel non-black
     },
     "color_processing": {
-        "saturation_boost": 1.35,  # Esalta i colori per un effetto cinema vivido
+        "saturation_boost": 1.35,  # Boosts colors for a vivid cinematic effect
         "brightness_boost": 1.1,
-        "min_brightness": 30,      # Minimo per non spegnere la lampada nelle scene scure
+        "min_brightness": 30,      # Minimum so the lamp doesn't turn off in dark scenes
         "max_brightness": 255,
-        "smoothing_factor": 0.4,   # 0.1 = ultra morbido, 0.9 = reattivo/istantaneo
-        "change_threshold": 12,    # Differenza minima RGB prima di inviare chiamata ad HA
-        "transition_time": 0.3     # Tempo di transizione nativo di Home Assistant (secondi)
+        "smoothing_factor": 0.4,   # 0.1 = ultra smooth, 0.9 = reactive/instant
+        "change_threshold": 12,    # Minimum RGB difference before sending HA request
+        "transition_time": 0.3     # Native Home Assistant transition time (seconds)
     }
 }
 
@@ -74,7 +74,7 @@ class ColorProcessor:
         self.first_run = True
 
     def calculate_dominant_color(self, pil_image):
-        """Estrae il colore dominante medio, filtrando bande nere e aumentando la saturazione."""
+        """Extracts the average dominant color, filtering black bars and boosting saturation."""
         img = pil_image.convert("RGB")
         pixels = list(img.getdata())
         
@@ -84,7 +84,7 @@ class ColorProcessor:
         ignore_black = self.cfg["capture"]["ignore_black_bars"]
 
         for r, g, b in pixels:
-            # Calcolo luminosità apparente
+            # Calculate apparent luminance
             luminance = 0.299 * r + 0.587 * g + 0.114 * b
             if ignore_black and luminance < black_thresh:
                 continue
@@ -93,7 +93,7 @@ class ColorProcessor:
             b_total += b
             valid_pixels += 1
 
-        # Se lo schermo è quasi tutto nero (o titoli di coda)
+        # If the screen is almost entirely black (or credits)
         if valid_pixels == 0:
             avg_r, avg_g, avg_b = 10, 10, 15
             brightness = self.cfg["color_processing"]["min_brightness"]
@@ -102,7 +102,7 @@ class ColorProcessor:
             avg_g = g_total / valid_pixels
             avg_b = b_total / valid_pixels
             
-            # Boost saturazione colore (RGB -> HSV -> Boost S -> RGB)
+            # Boost color saturation (RGB -> HSV -> Boost S -> RGB)
             h, s, v = colorsys.rgb_to_hsv(avg_r / 255.0, avg_g / 255.0, avg_b / 255.0)
             s = min(1.0, s * self.cfg["color_processing"]["saturation_boost"])
             v = min(1.0, v * self.cfg["color_processing"]["brightness_boost"])
@@ -110,13 +110,13 @@ class ColorProcessor:
             
             avg_r, avg_g, avg_b = r_boost * 255.0, g_boost * 255.0, b_boost * 255.0
             
-            # Luminosità dinamica scalata sui limiti
+            # Dynamic brightness scaled to limits
             raw_brightness = int(v * 255)
             min_b = self.cfg["color_processing"]["min_brightness"]
             max_b = self.cfg["color_processing"]["max_brightness"]
             brightness = max(min_b, min(max_b, raw_brightness))
 
-        # Smoothing Esponenziale (EMA) per evitare cambi bruschi e scatti
+        # Exponential Smoothing (EMA) to avoid sudden changes and stuttering
         alpha = self.cfg["color_processing"]["smoothing_factor"]
         if self.first_run:
             self.smoothed_rgb = [avg_r, avg_g, avg_b]
@@ -136,7 +136,7 @@ class ColorProcessor:
         return (final_r, final_g, final_b), final_brightness
 
     def should_update(self, new_rgb, new_brightness):
-        """Controlla se la variazione rispetto all'ultimo invio supera la soglia di sensibilità."""
+        """Checks if the variation from the last send exceeds the sensitivity threshold."""
         thresh = self.cfg["color_processing"]["change_threshold"]
         diff_r = abs(new_rgb[0] - self.prev_rgb[0])
         diff_g = abs(new_rgb[1] - self.prev_rgb[1])
@@ -175,10 +175,10 @@ class HomeAssistantClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status == 200
         except urllib.error.HTTPError as e:
-            logger.error(f"Errore HTTP da Home Assistant: {e.code} - {e.reason}")
+            logger.error(f"HTTP Error from Home Assistant: {e.code} - {e.reason}")
             return False
         except Exception as e:
-            logger.debug(f"Errore di rete temporaneo verso HA: {e}")
+            logger.debug(f"Temporary network error to HA: {e}")
             return False
 
 
@@ -213,16 +213,16 @@ def main():
     config = load_config()
     ha_cfg = config["home_assistant"]
     
-    if ha_cfg["token"] == "INSERISCI_QUI_IL_TUO_LONG_LIVED_TOKEN":
-        logger.error("Token di Home Assistant non configurato!")
-        logger.info("Modifica 'config.yaml' inserendo il tuo Long-Lived Access Token e l'entity_id della lampada.")
+    if ha_cfg["token"] == "INSERT_YOUR_LONG_LIVED_TOKEN_HERE":
+        logger.error("Home Assistant Token is not configured!")
+        logger.info("Edit 'config.yaml' and insert your Long-Lived Access Token and light entity_id.")
         sys.exit(1)
 
     logger.info("=====================================================")
-    logger.info("  Mac Ambient Screen Sync -> Home Assistant avviato  ")
+    logger.info("  Mac Ambient Screen Sync -> Home Assistant started  ")
     logger.info(f"  Target: {ha_cfg['entity_id']} @ {ha_cfg['url']}")
-    logger.info(f"  FPS di campionamento: {config['capture']['fps']} Hz")
-    logger.info("  Premi CTRL+C per arrestare la sincronizzazione.")
+    logger.info(f"  Sampling FPS: {config['capture']['fps']} Hz")
+    logger.info("  Press CTRL+C to stop synchronization.")
     logger.info("=====================================================")
 
     ha_client = HomeAssistantClient(ha_cfg)
@@ -239,45 +239,45 @@ def main():
 
     def handle_sigint(sig, frame):
         nonlocal running
-        logger.info("\nArresto in corso...")
+        logger.info("\nStopping...")
         running = False
 
     signal.signal(signal.SIGINT, handle_sigint)
 
     with mss.mss() as sct:
-        # Seleziona monitor
+        # Select monitor
         if monitor_idx >= len(sct.monitors):
-            mon = sct.monitors[0]  # Tutto lo schermo virtuale
+            mon = sct.monitors[0]  # Full virtual screen
         else:
             mon = sct.monitors[monitor_idx]
 
         while running:
             start_time = time.time()
             try:
-                # 1. Screenshot super veloce
+                # 1. Super fast screenshot
                 sct_img = sct.grab(mon)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
                 
-                # 2. Downsampling estremo (riduce CPU a < 1%)
+                # 2. Extreme downsampling (reduces CPU to < 1%)
                 img_small = img.resize((sw, sh), Image.Resampling.BILINEAR)
 
-                # 3. Calcolo colore e luminosità
+                # 3. Calculate color and brightness
                 rgb, brightness = processor.calculate_dominant_color(img_small)
 
-                # 4. Invia solo se c'è variazione significativa
+                # 4. Send only if there is a significant variation
                 if processor.should_update(rgb, brightness):
                     ha_client.update_light(rgb, brightness, transition)
-                    logger.info(f"🎨 RGB: {rgb} | Luminosità: {brightness}/255")
+                    logger.info(f"🎨 RGB: {rgb} | Brightness: {brightness}/255")
 
             except Exception as e:
-                logger.error(f"Errore ciclo di cattura: {e}")
+                logger.error(f"Capture loop error: {e}")
 
-            # Calcolo sleep dinamico per mantenere il framerate preciso
+            # Dynamic sleep calculation to maintain precise framerate
             elapsed = time.time() - start_time
             to_sleep = max(0.01, sleep_interval - elapsed)
             time.sleep(to_sleep)
 
-    logger.info("Sync terminato.")
+    logger.info("Sync finished.")
 
 if __name__ == "__main__":
     main()

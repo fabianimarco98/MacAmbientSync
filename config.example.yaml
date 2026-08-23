@@ -1,23 +1,23 @@
-# Configurazione Mac Ambient Screen Sync
+# Mac Ambient Screen Sync Configuration
 home_assistant:
   url: "http://192.168.X.X:8123"
-  token: "INSERISCI_QUI_IL_TUO_LONG_LIVED_TOKEN"
-  entity_id: "light.tua_lampada_rgb"   # Es. light.lampada_salotto
+  token: "INSERT_YOUR_LONG_LIVED_TOKEN_HERE"
+  entity_id: "light.your_rgb_lamp"   # e.g., light.living_room_lamp
   timeout: 1.0
 
 capture:
-  monitor_index: 1          # 1 = monitor integrato Mac / primario
-  fps: 4                    # 3-5 aggiornamenti al secondo (ottimale per Wi-Fi/Zigbee)
-  sample_width: 64          # Downscaling per CPU < 1%
+  monitor_index: 1          # 1 = primary built-in Mac monitor
+  fps: 4                    # 3-5 updates per second (optimal for Wi-Fi/Zigbee)
+  sample_width: 64          # Downscaling for CPU < 1%
   sample_height: 36
-  ignore_black_bars: true   # Rimuove le barre nere orizzontali dei film
-  black_threshold: 18       # Soglia sotto cui il pixel è considerato nero
+  ignore_black_bars: true   # Removes horizontal black bars from movies
+  black_threshold: 18       # Threshold below which a pixel is considered black
 
 color_processing:
-  saturation_boost: 1.35    # Aumenta i colori vivi (evita luci grigie/spente)
+  saturation_boost: 1.35    # Boost vivid colors (avoids gray/dull lights)
   brightness_boost: 1.10
-  min_brightness: 25        # Luminosità minima (non si spegne al buio totale)
+  min_brightness: 25        # Minimum brightness (won't turn off in total darkness)
   max_brightness: 255
-  smoothing_factor: 0.35    # 0.2 = transizioni morbide, 0.8 = cambi rapidi
-  change_threshold: 10      # Differenza colore minima per evitare chiamate ripetute
-  transition_time: 0.3      # Secondi di transizione fluida su Home Assistant
+  smoothing_factor: 0.35    # 0.2 = smooth transitions, 0.8 = fast changes
+  change_threshold: 10      # Minimum color difference to prevent spamming Home Assistant
+  transition_time: 0.3      # Seconds of smooth transition in Home Assistant

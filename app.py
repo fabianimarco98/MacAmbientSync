@@ -44,7 +44,7 @@ class AmbientSyncApp(rumps.App):
     def start_sync(self):
         self.config = load_config() # Reload config on start
         ha_cfg = self.config["home_assistant"]
-        if ha_cfg["token"] == "INSERISCI_QUI_IL_TUO_LONG_LIVED_TOKEN":
+        if ha_cfg["token"] == "INSERT_YOUR_LONG_LIVED_TOKEN_HERE":
             rumps.alert("Configuration Error", "Please edit config.yaml and insert your Home Assistant token and URL.")
             self.edit_config(None)
             return
