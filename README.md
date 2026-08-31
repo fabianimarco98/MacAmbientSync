@@ -1,49 +1,60 @@
 # MacAmbientSync
 
-MacAmbientSync is a lightweight macOS App (with a Menu Bar icon) that captures your Mac screen in real-time, calculates the dominant or average color of the scene, and synchronizes an RGB lamp or LED strip connected to Home Assistant. Optimized to have near-zero impact on your CPU.
+MacAmbientSync è un'applicazione desktop per macOS che cattura in tempo reale i colori predominanti del tuo schermo e li sincronizza istantaneamente con le luci RGB di **Home Assistant** (lampade, strisce LED, barre luminose). Progettata per avere un impatto quasi nullo sulla CPU (<1%) e una resa cromatica vivida e cinematografica.
 
-## Features
+---
 
-*   **Native Menu Bar App**: A status bar icon in the top right to easily start/stop the sync or edit settings.
-*   **Extremely low CPU impact**: Uses extreme downscaling before color calculation to ensure CPU usage stays under 1%.
-*   **Vivid colors**: Applies a saturation and brightness boost (configurable) to avoid dull or gray lighting effects.
-*   **Black bar removal**: Automatically detects and ignores the "letterbox" format (e.g., 21:9 movies).
-*   **Smoothing and efficiency**: Uses exponential moving average for smooth color transitions and avoids useless network calls to Home Assistant if the color variation is minimal.
+## ✨ Funzionalità Principali
 
-## Installation for End Users
+* 🖥️ **Interfaccia Grafica Dedicata (GUI)**: Un'applicazione desktop completa con finestra nativa su macOS, controlli immediati, anteprima del colore in tempo reale e gestione completa dei parametri senza dover modificare file manualmente.
+* 🛑 **Chiusura Completa e Pulita**: Quando chiudi la finestra (o usi `Cmd+Q` / `Chiudi`), l'app e tutti i thread di cattura e trasmissione vengono interrotti immediatamente senza processi residui in background.
+* 🎨 **Anteprima Live Colore e Luminosità**: Mostra in diretta il colore dominante rilevato a schermo, i valori RGB, il codice HEX e la percentuale di luminosità inviata a Home Assistant.
+* ⚡ **Verifica Connessione Integrata**: Pulsante "Verifica Connessione" per testare istantaneamente il server Home Assistant, il Token e l'Entity ID della lampada con feedback visivo.
+* 📺 **Rilevamento Bande Nere (Letterbox)**: Esclude automaticamente le bande nere dei film (es. formato 21:9) per calcolare solo i colori effettivi della scena.
+* ⚡ **Prestazioni e CPU < 1%**: Utilizza un downscaling rapido e l'exponential moving average (EMA) per transizioni fluide e filtri anti-spam sulle richieste di rete.
+* 🖥️ **Supporto Multi-Monitor**: Scegli quale monitor sincronizzare (display principale, monitor secondario o display combinato).
 
-1. Download and unzip `MacAmbientSync.app` from the latest release.
-2. Move the App to your **Applications** folder.
-3. Click the palette icon 🎨 in your menu bar.
-4. Click on **Edit Config...** to configure:
-   * `url`: your Home Assistant address (e.g., `http://192.168.1.100:8123`)
-   * `token`: your Home Assistant Long-Lived Access Token
-   * `entity_id`: the entity ID of your lamp (e.g., `light.living_room_lamp`)
-5. Click on **Start Sync**! The icon will turn 🔴 to indicate that screen capture is active.
+---
 
-## Building from Source (For Developers)
+## 🚀 Come Eseguire l'Applicazione
 
-If you want to compile the app yourself from source:
+### 1. Requisiti e Installazione Dipendenze
+Assicurati di avere Python 3 installato. Crea un virtual environment e installa i pacchetti necessari:
 
-1.  Clone this repository.
-2.  Create a Python virtual environment and install dependencies:
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
-    pip install py2app
-    ```
-3.  Run the build command:
-    ```bash
-    python setup.py py2app
-    ```
-4.  You will find the ready-to-use application in the `dist/MacAmbientSync.app` folder.
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-## Advanced Configuration
+### 2. Avvio dell'App Desktop
+Per avviare l'applicazione con interfaccia grafica:
 
-In the `config.yaml` file (accessible via the `Edit Config...` menu) you can adjust several parameters:
+```bash
+source venv/bin/activate
+python3 app.py
+```
 
-*   `fps`: Sampling frequency. 3-5 Hz is often optimal.
-*   `monitor_index`: Which monitor to capture (useful if you use external displays).
-*   `saturation_boost`: Value > 1 to enhance colors.
-*   `smoothing_factor`: Lower value (e.g., 0.2) for smooth transitions, higher value (e.g., 0.8) for fast changes.
+### 3. Configurazione
+All'interno dell'app:
+1. Nella scheda **🏠 Home Assistant**:
+   - Inserisci l'URL di Home Assistant (es. `http://192.168.1.100:8123`)
+   - Inserisci il tuo **Long-Lived Access Token** (generabile dal tuo profilo su Home Assistant -> Token di accesso a lunga durata)
+   - Inserisci l'**Entity ID** della tua lampada (es. `light.salotto_lampada`)
+   - Clicca su **⚡ Verifica Connessione** per assicurarti che la configurazione sia corretta.
+2. Nelle altre schede puoi personalizzare il monitor, gli FPS di campionamento, la rimozione delle bande nere e i boost di saturazione/luminosità.
+3. Clicca su **💾 Salva Configurazione** e poi su **▶ Avvia Sincronizzazione**!
+
+---
+
+## 📦 Compilazione come App macOS (.app)
+
+Per generare il file `MacAmbientSync.app` autonomo:
+
+```bash
+source venv/bin/activate
+pip install py2app
+python setup.py py2app
+```
+
+L'applicazione compilata sarà disponibile nella cartella `dist/MacAmbientSync.app`.

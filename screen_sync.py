@@ -10,6 +10,7 @@ import colorsys
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import time
@@ -21,7 +22,7 @@ try:
     import mss
     from PIL import Image
 except ImportError:
-    print("[ERROR] Missing dependencies. Install with: pip install mss pillow pyyaml")
+    print("[ERROR] Missing dependencies. Install with: pip install mss pillow pyyaml PyQt6")
     sys.exit(1)
 
 try:
@@ -37,17 +38,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AmbientSync")
 
-# Default Config
+# Default Configuration
 DEFAULT_CONFIG = {
     "home_assistant": {
-        "url": "http://192.168.X.X:8123",
-        "token": "INSERT_YOUR_LONG_LIVED_TOKEN_HERE",
+        "url": "http://192.168.1.100:8123",
+        "token": "INSERISCI_IL_TUO_LONG_LIVED_ACCESS_TOKEN",
         "entity_id": "light.your_rgb_lamp",
-        "timeout": 1.0
+        "timeout": 1.5
     },
     "capture": {
-        "monitor_index": 1,        # 1 = Primary Monitor
-        "fps": 5,                  # 3-5 Hz is ideal for Wi-Fi/Zigbee lamps without overload
+        "monitor_index": 1,        # 1 = Primary Display, 0 = All Displays Combined
+        "fps": 5,                  # 3-8 Hz is ideal for Wi-Fi / Zigbee lamps
         "sample_width": 64,        # Fast downscale for near-zero CPU load
         "sample_height": 36,
         "ignore_black_bars": True, # Removes movie black bars (letterbox)
@@ -55,18 +56,113 @@ DEFAULT_CONFIG = {
     },
     "color_processing": {
         "saturation_boost": 1.35,  # Boosts colors for a vivid cinematic effect
-        "brightness_boost": 1.1,
-        "min_brightness": 30,      # Minimum so the lamp doesn't turn off in dark scenes
-        "max_brightness": 255,
-        "smoothing_factor": 0.4,   # 0.1 = ultra smooth, 0.9 = reactive/instant
-        "change_threshold": 12,    # Minimum RGB difference before sending HA request
+        "brightness_boost": 1.10,  # Brightness scaling
+        "min_brightness": 25,      # Minimum brightness so lamp stays visible in dark scenes
+        "max_brightness": 255,     # Maximum brightness
+        "smoothing_factor": 0.35,  # 0.1 = ultra smooth, 0.9 = reactive/instant
+        "change_threshold": 10,    # Minimum RGB difference before sending HA request
         "transition_time": 0.3     # Native Home Assistant transition time (seconds)
     }
 }
 
+
+def get_config_path() -> Path:
+    """Returns the path to the configuration file in Application Support."""
+    app_support_dir = Path.home() / "Library" / "Application Support" / "MacAmbientSync"
+    app_support_dir.mkdir(parents=True, exist_ok=True)
+    return app_support_dir / "config.yaml"
+
+
+def load_config() -> dict:
+    """Loads configuration from YAML file or falls back to defaults."""
+    config_path = get_config_path()
+    
+    # If config does not exist, copy from example if available
+    if not config_path.exists():
+        example_path = Path(__file__).parent / "config.example.yaml"
+        if getattr(sys, 'frozen', False):
+            # Py2app bundle environment
+            res_path = Path(sys.executable).parent.parent / "Resources" / "config.example.yaml"
+            if res_path.exists():
+                example_path = res_path
+                
+        if example_path.exists():
+            try:
+                shutil.copy(example_path, config_path)
+            except Exception as e:
+                logger.warning(f"Could not copy config.example.yaml: {e}")
+    
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # Deep copy default
+    
+    if config_path.exists() and yaml is not None:
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                user_cfg = yaml.safe_load(f)
+                if user_cfg and isinstance(user_cfg, dict):
+                    for section, values in user_cfg.items():
+                        if isinstance(values, dict) and section in cfg:
+                            cfg[section].update(values)
+                        else:
+                            cfg[section] = values
+        except Exception as e:
+            logger.error(f"Error loading config.yaml: {e}")
+            
+    return cfg
+
+
+def save_config(cfg: dict) -> bool:
+    """Saves the configuration dictionary to the YAML file."""
+    config_path = get_config_path()
+    try:
+        if yaml is not None:
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        else:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
+        return False
+
+
+def get_available_monitors() -> list:
+    """Discovers all connected monitors via mss."""
+    monitors_list = []
+    try:
+        with mss.mss() as sct:
+            for idx, mon in enumerate(sct.monitors):
+                if idx == 0:
+                    name = f"Tutti i monitor uniti ({mon['width']}x{mon['height']})"
+                elif idx == 1:
+                    name = f"Monitor 1 - Principale ({mon['width']}x{mon['height']})"
+                else:
+                    name = f"Monitor {idx} ({mon['width']}x{mon['height']})"
+                monitors_list.append({
+                    "index": idx,
+                    "name": name,
+                    "width": mon["width"],
+                    "height": mon["height"],
+                    "left": mon["left"],
+                    "top": mon["top"]
+                })
+    except Exception as e:
+        logger.error(f"Error enumerating monitors: {e}")
+        monitors_list.append({"index": 1, "name": "Monitor Principale", "width": 1920, "height": 1080})
+    return monitors_list
+
+
 class ColorProcessor:
     def __init__(self, cfg):
         self.cfg = cfg
+        self.prev_rgb = (0, 0, 0)
+        self.prev_brightness = 0
+        self.smoothed_rgb = [0.0, 0.0, 0.0]
+        self.smoothed_brightness = 0.0
+        self.first_run = True
+
+    def reset(self):
+        """Resets smoothing state."""
         self.prev_rgb = (0, 0, 0)
         self.prev_brightness = 0
         self.smoothed_rgb = [0.0, 0.0, 0.0]
@@ -80,8 +176,8 @@ class ColorProcessor:
         
         r_total, g_total, b_total = 0, 0, 0
         valid_pixels = 0
-        black_thresh = self.cfg["capture"]["black_threshold"]
-        ignore_black = self.cfg["capture"]["ignore_black_bars"]
+        black_thresh = self.cfg.get("capture", {}).get("black_threshold", 20)
+        ignore_black = self.cfg.get("capture", {}).get("ignore_black_bars", True)
 
         for r, g, b in pixels:
             # Calculate apparent luminance
@@ -93,34 +189,37 @@ class ColorProcessor:
             b_total += b
             valid_pixels += 1
 
-        # If the screen is almost entirely black (or credits)
+        # If the screen is almost entirely black (e.g. credits or off screen)
         if valid_pixels == 0:
-            avg_r, avg_g, avg_b = 10, 10, 15
-            brightness = self.cfg["color_processing"]["min_brightness"]
+            avg_r, avg_g, avg_b = 8, 8, 12
+            brightness = self.cfg.get("color_processing", {}).get("min_brightness", 25)
         else:
             avg_r = r_total / valid_pixels
             avg_g = g_total / valid_pixels
             avg_b = b_total / valid_pixels
             
             # Boost color saturation (RGB -> HSV -> Boost S -> RGB)
+            sat_boost = self.cfg.get("color_processing", {}).get("saturation_boost", 1.35)
+            bright_boost = self.cfg.get("color_processing", {}).get("brightness_boost", 1.10)
+            
             h, s, v = colorsys.rgb_to_hsv(avg_r / 255.0, avg_g / 255.0, avg_b / 255.0)
-            s = min(1.0, s * self.cfg["color_processing"]["saturation_boost"])
-            v = min(1.0, v * self.cfg["color_processing"]["brightness_boost"])
+            s = min(1.0, s * sat_boost)
+            v = min(1.0, v * bright_boost)
             r_boost, g_boost, b_boost = colorsys.hsv_to_rgb(h, s, v)
             
             avg_r, avg_g, avg_b = r_boost * 255.0, g_boost * 255.0, b_boost * 255.0
             
             # Dynamic brightness scaled to limits
             raw_brightness = int(v * 255)
-            min_b = self.cfg["color_processing"]["min_brightness"]
-            max_b = self.cfg["color_processing"]["max_brightness"]
+            min_b = self.cfg.get("color_processing", {}).get("min_brightness", 25)
+            max_b = self.cfg.get("color_processing", {}).get("max_brightness", 255)
             brightness = max(min_b, min(max_b, raw_brightness))
 
         # Exponential Smoothing (EMA) to avoid sudden changes and stuttering
-        alpha = self.cfg["color_processing"]["smoothing_factor"]
+        alpha = self.cfg.get("color_processing", {}).get("smoothing_factor", 0.35)
         if self.first_run:
             self.smoothed_rgb = [avg_r, avg_g, avg_b]
-            self.smoothed_brightness = brightness
+            self.smoothed_brightness = float(brightness)
             self.first_run = False
         else:
             for i in range(3):
@@ -128,22 +227,22 @@ class ColorProcessor:
                 self.smoothed_rgb[i] = alpha * target + (1 - alpha) * self.smoothed_rgb[i]
             self.smoothed_brightness = alpha * brightness + (1 - alpha) * self.smoothed_brightness
 
-        final_r = int(self.smoothed_rgb[0])
-        final_g = int(self.smoothed_rgb[1])
-        final_b = int(self.smoothed_rgb[2])
-        final_brightness = int(self.smoothed_brightness)
+        final_r = max(0, min(255, int(round(self.smoothed_rgb[0]))))
+        final_g = max(0, min(255, int(round(self.smoothed_rgb[1]))))
+        final_b = max(0, min(255, int(round(self.smoothed_rgb[2]))))
+        final_brightness = max(0, min(255, int(round(self.smoothed_brightness))))
 
         return (final_r, final_g, final_b), final_brightness
 
     def should_update(self, new_rgb, new_brightness):
         """Checks if the variation from the last send exceeds the sensitivity threshold."""
-        thresh = self.cfg["color_processing"]["change_threshold"]
+        thresh = self.cfg.get("color_processing", {}).get("change_threshold", 10)
         diff_r = abs(new_rgb[0] - self.prev_rgb[0])
         diff_g = abs(new_rgb[1] - self.prev_rgb[1])
         diff_b = abs(new_rgb[2] - self.prev_rgb[2])
         diff_bright = abs(new_brightness - self.prev_brightness)
 
-        if diff_r > thresh or diff_g > thresh or diff_b > thresh or diff_bright > (thresh * 1.5):
+        if diff_r >= thresh or diff_g >= thresh or diff_b >= thresh or diff_bright >= (thresh * 1.5):
             self.prev_rgb = new_rgb
             self.prev_brightness = new_brightness
             return True
@@ -152,83 +251,101 @@ class ColorProcessor:
 
 class HomeAssistantClient:
     def __init__(self, ha_cfg):
-        self.url = ha_cfg["url"].rstrip("/")
-        self.token = ha_cfg["token"]
-        self.entity_id = ha_cfg["entity_id"]
-        self.timeout = ha_cfg.get("timeout", 1.0)
-        self.service_url = f"{self.url}/api/services/light/turn_on"
+        self.url = ha_cfg.get("url", "").rstrip("/")
+        self.token = ha_cfg.get("token", "")
+        self.entity_id = ha_cfg.get("entity_id", "")
+        self.timeout = ha_cfg.get("timeout", 1.5)
         self.headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
 
-    def update_light(self, rgb_color, brightness, transition):
-        payload = {
-            "entity_id": self.entity_id,
-            "rgb_color": [rgb_color[0], rgb_color[1], rgb_color[2]],
-            "brightness": brightness,
-            "transition": transition
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(self.service_url, data=data, headers=self.headers, method="POST")
+    def test_connection(self) -> tuple[bool, str]:
+        """Tests connection to Home Assistant API and verifies entity status."""
+        if not self.url or "192.168.X.X" in self.url:
+            return False, "URL di Home Assistant non configurato."
+        if not self.token or "INSERISCI" in self.token or "INSERT" in self.token:
+            return False, "Token di accesso non inserito."
+        
+        # 1. Check API root
+        api_url = f"{self.url}/api/"
+        req = urllib.request.Request(api_url, headers=self.headers, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.status == 200
+                if resp.status != 200:
+                    return False, f"Risposta inattesa da Home Assistant: HTTP {resp.status}"
+                data = json.loads(resp.read().decode("utf-8"))
+                message = data.get("message", "API OK")
         except urllib.error.HTTPError as e:
-            logger.error(f"HTTP Error from Home Assistant: {e.code} - {e.reason}")
-            return False
+            if e.code == 401:
+                return False, "Errore 401: Token non valido o scaduto."
+            return False, f"Errore HTTP {e.code}: {e.reason}"
+        except urllib.error.URLError as e:
+            return False, f"Impossibile raggiungere Home Assistant: {e.reason}"
         except Exception as e:
-            logger.debug(f"Temporary network error to HA: {e}")
-            return False
+            return False, f"Errore di connessione: {e}"
 
-
-def load_config():
-    app_support_dir = Path.home() / "Library" / "Application Support" / "MacAmbientSync"
-    app_support_dir.mkdir(parents=True, exist_ok=True)
-    config_path = app_support_dir / "config.yaml"
-    
-    # If the user hasn't created a config yet, create a default one from example if it exists
-    if not config_path.exists():
-        import sys
-        if getattr(sys, 'frozen', False):
-            # Py2app environment
-            example_path = Path(sys.executable).parent.parent / "Resources" / "config.example.yaml"
-        else:
-            example_path = Path(__file__).parent / "config.example.yaml"
-            
-        if example_path.exists():
-            import shutil
-            shutil.copy(example_path, config_path)
-            
-    if config_path.exists() and yaml:
-        with open(config_path, "r", encoding="utf-8") as f:
-            user_cfg = yaml.safe_load(f)
-            # Merge
-            cfg = DEFAULT_CONFIG.copy()
-            if user_cfg:
-                for k, v in user_cfg.items():
-                    if isinstance(v, dict) and k in cfg:
-                        cfg[k].update(v)
+        # 2. Check Entity state
+        if self.entity_id:
+            entity_url = f"{self.url}/api/states/{self.entity_id}"
+            req_ent = urllib.request.Request(entity_url, headers=self.headers, method="GET")
+            try:
+                with urllib.request.urlopen(req_ent, timeout=self.timeout) as resp:
+                    if resp.status == 200:
+                        ent_data = json.loads(resp.read().decode("utf-8"))
+                        friendly_name = ent_data.get("attributes", {}).get("friendly_name", self.entity_id)
+                        state = ent_data.get("state", "unknown")
+                        return True, f"Connesso! Entità '{friendly_name}' trovata (Stato: {state})."
                     else:
-                        cfg[k] = v
-            return cfg
-    return DEFAULT_CONFIG
+                        return False, f"Entità '{self.entity_id}' non trovata (HTTP {resp.status})."
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    return False, f"Entità '{self.entity_id}' non esiste su Home Assistant."
+                return True, f"API Connessa ({message}), ma errore entità: {e.reason}"
+            except Exception as e:
+                return True, f"API Connessa, ma errore lettura stato entità: {e}"
+
+        return True, f"Connessione a Home Assistant riuscita ({message})."
+
+    def update_light(self, rgb_color, brightness, transition=0.3) -> tuple[bool, str]:
+        """Sends light update to Home Assistant service."""
+        service_url = f"{self.url}/api/services/light/turn_on"
+        payload = {
+            "entity_id": self.entity_id,
+            "rgb_color": [int(rgb_color[0]), int(rgb_color[1]), int(rgb_color[2])],
+            "brightness": int(brightness),
+            "transition": float(transition)
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(service_url, data=data, headers=self.headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                if resp.status == 200:
+                    return True, "OK"
+                return False, f"HTTP {resp.status}"
+        except urllib.error.HTTPError as e:
+            err_msg = f"HTTP {e.code}: {e.reason}"
+            logger.error(f"Home Assistant error: {err_msg}")
+            return False, err_msg
+        except Exception as e:
+            logger.debug(f"Network error to HA: {e}")
+            return False, str(e)
 
 
 def main():
     config = load_config()
     ha_cfg = config["home_assistant"]
     
-    if ha_cfg["token"] == "INSERT_YOUR_LONG_LIVED_TOKEN_HERE":
-        logger.error("Home Assistant Token is not configured!")
-        logger.info("Edit 'config.yaml' and insert your Long-Lived Access Token and light entity_id.")
+    if "INSERISCI" in ha_cfg.get("token", "") or "INSERT" in ha_cfg.get("token", ""):
+        logger.error("Token Home Assistant non configurato!")
+        logger.info(f"Modifica la configurazione in {get_config_path()}")
         sys.exit(1)
 
     logger.info("=====================================================")
-    logger.info("  Mac Ambient Screen Sync -> Home Assistant started  ")
+    logger.info("  Mac Ambient Screen Sync -> Home Assistant CLI     ")
     logger.info(f"  Target: {ha_cfg['entity_id']} @ {ha_cfg['url']}")
     logger.info(f"  Sampling FPS: {config['capture']['fps']} Hz")
-    logger.info("  Press CTRL+C to stop synchronization.")
+    logger.info("  Premi CTRL+C per terminare la sincronizzazione.   ")
     logger.info("=====================================================")
 
     ha_client = HomeAssistantClient(ha_cfg)
@@ -245,45 +362,42 @@ def main():
 
     def handle_sigint(sig, frame):
         nonlocal running
-        logger.info("\nStopping...")
+        logger.info("\nInterruzione richiesta... Chiusura in corso.")
         running = False
 
     signal.signal(signal.SIGINT, handle_sigint)
 
     with mss.mss() as sct:
-        # Select monitor
         if monitor_idx >= len(sct.monitors):
-            mon = sct.monitors[0]  # Full virtual screen
+            mon = sct.monitors[0]
         else:
             mon = sct.monitors[monitor_idx]
 
         while running:
             start_time = time.time()
             try:
-                # 1. Super fast screenshot
                 sct_img = sct.grab(mon)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-                
-                # 2. Extreme downsampling (reduces CPU to < 1%)
                 img_small = img.resize((sw, sh), Image.Resampling.BILINEAR)
 
-                # 3. Calculate color and brightness
                 rgb, brightness = processor.calculate_dominant_color(img_small)
 
-                # 4. Send only if there is a significant variation
                 if processor.should_update(rgb, brightness):
-                    ha_client.update_light(rgb, brightness, transition)
-                    logger.info(f"🎨 RGB: {rgb} | Brightness: {brightness}/255")
+                    success, msg = ha_client.update_light(rgb, brightness, transition)
+                    if success:
+                        logger.info(f"🎨 RGB: {rgb} | Luminosità: {brightness}/255")
+                    else:
+                        logger.warning(f"Errore invio HA: {msg}")
 
             except Exception as e:
-                logger.error(f"Capture loop error: {e}")
+                logger.error(f"Errore ciclo di cattura: {e}")
 
-            # Dynamic sleep calculation to maintain precise framerate
             elapsed = time.time() - start_time
             to_sleep = max(0.01, sleep_interval - elapsed)
             time.sleep(to_sleep)
 
-    logger.info("Sync finished.")
+    logger.info("Sincronizzazione terminata.")
+
 
 if __name__ == "__main__":
     main()

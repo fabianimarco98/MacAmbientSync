@@ -6,16 +6,16 @@ OPTIONS = {
     'argv_emulation': False,
     'iconfile': '', # You can add an icon.icns here
     'plist': {
-        'LSUIElement': True, # Runs as a menubar-only app (no dock icon)
         'CFBundleName': 'MacAmbientSync',
         'CFBundleDisplayName': 'MacAmbientSync',
         'CFBundleIdentifier': 'com.marcofabiani.macambientsync',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
-        # To avoid problems with screen recording permissions:
-        'NSCameraUsageDescription': 'This app needs screen recording permissions to capture screen colors.',
+        'CFBundleVersion': '1.1.0',
+        'CFBundleShortVersionString': '1.1.0',
+        'NSRequiresAquaSystemAppearance': False,
+        'NSScreenCaptureUsageDescription': 'MacAmbientSync needs screen recording permissions to capture screen colors in real-time.',
+        'NSCameraUsageDescription': 'MacAmbientSync needs screen capture permissions to analyze screen colors.',
     },
-    'packages': ['rumps', 'mss', 'PIL', 'yaml']
+    'packages': ['PyQt6', 'mss', 'PIL', 'yaml']
 }
 
 setup(
