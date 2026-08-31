@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import signal
+import ssl
 import sys
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ DEFAULT_CONFIG = {
         "url": "http://192.168.1.100:8123",
         "token": "INSERISCI_IL_TUO_LONG_LIVED_ACCESS_TOKEN",
         "entity_id": "light.your_rgb_lamp",
-        "timeout": 1.5
+        "timeout": 2.0
     },
     "capture": {
         "monitor_index": 1,        # 1 = Primary Display, 0 = All Displays Combined
@@ -52,7 +53,7 @@ DEFAULT_CONFIG = {
         "sample_width": 64,        # Fast downscale for near-zero CPU load
         "sample_height": 36,
         "ignore_black_bars": True, # Removes movie black bars (letterbox)
-        "black_threshold": 20      # Minimum brightness to consider a pixel non-black
+        "black_threshold": 18      # Minimum brightness to consider a pixel non-black
     },
     "color_processing": {
         "saturation_boost": 1.35,  # Boosts colors for a vivid cinematic effect
@@ -60,8 +61,8 @@ DEFAULT_CONFIG = {
         "min_brightness": 25,      # Minimum brightness so lamp stays visible in dark scenes
         "max_brightness": 255,     # Maximum brightness
         "smoothing_factor": 0.35,  # 0.1 = ultra smooth, 0.9 = reactive/instant
-        "change_threshold": 10,    # Minimum RGB difference before sending HA request
-        "transition_time": 0.3     # Native Home Assistant transition time (seconds)
+        "change_threshold": 8,     # Minimum RGB difference before sending HA request
+        "transition_time": 0.0     # 0.0 is best for responsive streaming without lag
     }
 }
 
@@ -81,7 +82,7 @@ def load_config() -> dict:
     if not config_path.exists():
         example_path = Path(__file__).parent / "config.example.yaml"
         if getattr(sys, 'frozen', False):
-            # Py2app bundle environment
+            # Py2app / PyInstaller bundle environment
             res_path = Path(sys.executable).parent.parent / "Resources" / "config.example.yaml"
             if res_path.exists():
                 example_path = res_path
@@ -160,6 +161,8 @@ class ColorProcessor:
         self.smoothed_rgb = [0.0, 0.0, 0.0]
         self.smoothed_brightness = 0.0
         self.first_run = True
+        self.force_next_update = True
+        self.last_sent_time = 0
 
     def reset(self):
         """Resets smoothing state."""
@@ -168,6 +171,8 @@ class ColorProcessor:
         self.smoothed_rgb = [0.0, 0.0, 0.0]
         self.smoothed_brightness = 0.0
         self.first_run = True
+        self.force_next_update = True
+        self.last_sent_time = 0
 
     def calculate_dominant_color(self, pil_image):
         """Extracts the average dominant color, filtering black bars and boosting saturation."""
@@ -176,7 +181,7 @@ class ColorProcessor:
         
         r_total, g_total, b_total = 0, 0, 0
         valid_pixels = 0
-        black_thresh = self.cfg.get("capture", {}).get("black_threshold", 20)
+        black_thresh = self.cfg.get("capture", {}).get("black_threshold", 18)
         ignore_black = self.cfg.get("capture", {}).get("ignore_black_bars", True)
 
         for r, g, b in pixels:
@@ -189,7 +194,7 @@ class ColorProcessor:
             b_total += b
             valid_pixels += 1
 
-        # If the screen is almost entirely black (e.g. credits or off screen)
+        # If the screen is almost entirely black
         if valid_pixels == 0:
             avg_r, avg_g, avg_b = 8, 8, 12
             brightness = self.cfg.get("color_processing", {}).get("min_brightness", 25)
@@ -215,7 +220,7 @@ class ColorProcessor:
             max_b = self.cfg.get("color_processing", {}).get("max_brightness", 255)
             brightness = max(min_b, min(max_b, raw_brightness))
 
-        # Exponential Smoothing (EMA) to avoid sudden changes and stuttering
+        # Exponential Smoothing (EMA)
         alpha = self.cfg.get("color_processing", {}).get("smoothing_factor", 0.35)
         if self.first_run:
             self.smoothed_rgb = [avg_r, avg_g, avg_b]
@@ -235,21 +240,37 @@ class ColorProcessor:
         return (final_r, final_g, final_b), final_brightness
 
     def should_update(self, new_rgb, new_brightness):
-        """Checks if the variation from the last send exceeds the sensitivity threshold."""
-        thresh = self.cfg.get("color_processing", {}).get("change_threshold", 10)
+        """Checks if the variation from the last send exceeds the sensitivity threshold, with initial force & periodic heartbeat."""
+        now = time.time()
+        
+        # Always send the initial frame immediately
+        if self.force_next_update:
+            self.force_next_update = False
+            self.prev_rgb = new_rgb
+            self.prev_brightness = new_brightness
+            self.last_sent_time = now
+            return True
+
+        thresh = self.cfg.get("color_processing", {}).get("change_threshold", 8)
         diff_r = abs(new_rgb[0] - self.prev_rgb[0])
         diff_g = abs(new_rgb[1] - self.prev_rgb[1])
         diff_b = abs(new_rgb[2] - self.prev_rgb[2])
         diff_bright = abs(new_brightness - self.prev_brightness)
 
+        # Heartbeat: re-send color every 4 seconds to maintain sync if light was altered
+        if (now - self.last_sent_time) > 4.0:
+            self.prev_rgb = new_rgb
+            self.prev_brightness = new_brightness
+            self.last_sent_time = now
+            return True
+
         if diff_r >= thresh or diff_g >= thresh or diff_b >= thresh or diff_bright >= (thresh * 1.5):
             self.prev_rgb = new_rgb
             self.prev_brightness = new_brightness
+            self.last_sent_time = now
             return True
         return False
 
-
-import ssl
 
 class HomeAssistantClient:
     def __init__(self, ha_cfg):
@@ -261,7 +282,6 @@ class HomeAssistantClient:
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
-        # Permetti HTTPS anche con certificati self-signed su rete locale
         self.ssl_context = ssl._create_unverified_context()
 
     def test_connection(self) -> tuple[bool, str]:
@@ -314,15 +334,17 @@ class HomeAssistantClient:
 
         return True, f"Connessione a Home Assistant riuscita ({message})."
 
-    def update_light(self, rgb_color, brightness, transition=0.3) -> tuple[bool, str]:
+    def update_light(self, rgb_color, brightness, transition=0.0) -> tuple[bool, str]:
         """Sends light update to Home Assistant service."""
         service_url = f"{self.url}/api/services/light/turn_on"
         payload = {
             "entity_id": self.entity_id,
             "rgb_color": [int(rgb_color[0]), int(rgb_color[1]), int(rgb_color[2])],
-            "brightness": int(brightness),
-            "transition": float(transition)
+            "brightness": int(brightness)
         }
+        if transition is not None and float(transition) > 0.05:
+            payload["transition"] = float(transition)
+
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(service_url, data=data, headers=self.headers, method="POST")
         try:
@@ -337,7 +359,6 @@ class HomeAssistantClient:
         except Exception as e:
             logger.debug(f"Network error to HA: {e}")
             return False, str(e)
-
 
 
 def main():
@@ -364,7 +385,7 @@ def main():
     sw = config["capture"]["sample_width"]
     sh = config["capture"]["sample_height"]
     monitor_idx = config["capture"]["monitor_index"]
-    transition = config["color_processing"]["transition_time"]
+    transition = config["color_processing"].get("transition_time", 0.0)
 
     running = True
 

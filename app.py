@@ -4,6 +4,7 @@ MacAmbientSync - GUI Application
 Modern macOS Desktop App to control screen ambient lighting sync with Home Assistant.
 """
 
+import json
 import os
 import sys
 import time
@@ -47,6 +48,7 @@ class SyncWorker(QThread):
         self.config = new_config
         self.ha_client = HomeAssistantClient(self.config["home_assistant"])
         self.processor.cfg = new_config
+        self.processor.force_next_update = True
 
     def stop(self):
         self.running = False
@@ -54,13 +56,14 @@ class SyncWorker(QThread):
     def run(self):
         self.running = True
         self.processor.reset()
+        self.processor.force_next_update = True
 
         fps = max(1, self.config.get("capture", {}).get("fps", 5))
         sleep_interval = 1.0 / fps
         sw = self.config.get("capture", {}).get("sample_width", 64)
         sh = self.config.get("capture", {}).get("sample_height", 36)
         monitor_idx = self.config.get("capture", {}).get("monitor_index", 1)
-        transition = self.config.get("color_processing", {}).get("transition_time", 0.3)
+        transition = self.config.get("color_processing", {}).get("transition_time", 0.0)
 
         self.log_emitted.emit("INFO", f"Avvio sincronizzazione schermo (Monitor: {monitor_idx}, FPS: {fps})")
 
@@ -118,8 +121,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mac Ambient Sync")
-        self.resize(780, 680)
-        self.setMinimumSize(680, 580)
+        self.resize(780, 700)
+        self.setMinimumSize(680, 600)
 
         self.config = load_config()
         self.worker = None
@@ -277,19 +280,26 @@ class MainWindow(QMainWindow):
         self.spin_ha_timeout = QDoubleSpinBox()
         self.spin_ha_timeout.setRange(0.2, 10.0)
         self.spin_ha_timeout.setSingleStep(0.1)
-        self.spin_ha_timeout.setValue(1.5)
+        self.spin_ha_timeout.setValue(2.0)
         form_layout.addWidget(self.spin_ha_timeout, 3, 1)
 
         layout.addWidget(form_group)
 
-        # Test Connection Box
-        test_box = QHBoxLayout()
-        self.btn_test_conn = QPushButton("⚡  Verifica Connessione a Home Assistant")
+        # Buttons row for Testing Connection and Testing Lamp Color
+        actions_row = QHBoxLayout()
+        self.btn_test_conn = QPushButton("⚡  Verifica Connessione")
         self.btn_test_conn.setObjectName("BtnTestConn")
-        self.btn_test_conn.setMinimumHeight(34)
+        self.btn_test_conn.setMinimumHeight(36)
         self.btn_test_conn.clicked.connect(self.test_ha_connection)
-        test_box.addWidget(self.btn_test_conn)
-        layout.addLayout(test_box)
+
+        self.btn_test_light = QPushButton("💡  Testa Luce (Invia Colore)")
+        self.btn_test_light.setMinimumHeight(36)
+        self.btn_test_light.setToolTip("Invia un colore di test arancione alla lampada per verificare la risposta fisica")
+        self.btn_test_light.clicked.connect(self.send_test_color_to_lamp)
+
+        actions_row.addWidget(self.btn_test_conn)
+        actions_row.addWidget(self.btn_test_light)
+        layout.addLayout(actions_row)
 
         # Test result banner
         self.lbl_test_result = QLabel("")
@@ -365,8 +375,8 @@ class MainWindow(QMainWindow):
         thresh_box = QHBoxLayout()
         self.slider_black_thresh = QSlider(Qt.Orientation.Horizontal)
         self.slider_black_thresh.setRange(0, 60)
-        self.slider_black_thresh.setValue(20)
-        self.lbl_black_thresh_val = QLabel("20")
+        self.slider_black_thresh.setValue(18)
+        self.lbl_black_thresh_val = QLabel("18")
         self.lbl_black_thresh_val.setFixedWidth(35)
         self.slider_black_thresh.valueChanged.connect(lambda v: self.lbl_black_thresh_val.setText(str(v)))
         thresh_box.addWidget(self.slider_black_thresh)
@@ -374,6 +384,15 @@ class MainWindow(QMainWindow):
         lb_layout.addLayout(thresh_box, 1, 1)
 
         layout.addWidget(lb_group)
+
+        # Permissions helper
+        perm_box = QHBoxLayout()
+        btn_open_perms = QPushButton("⚙️  Apri Preferenze Privacy Schermo macOS")
+        btn_open_perms.setToolTip("Consenti a MacAmbientSync l'accesso alla registrazione schermo se non cattura i colori delle finestre")
+        btn_open_perms.clicked.connect(lambda: os.system('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"'))
+        perm_box.addWidget(btn_open_perms)
+        layout.addLayout(perm_box)
+
         layout.addStretch()
 
     def setup_colors_tab(self):
@@ -454,9 +473,9 @@ class MainWindow(QMainWindow):
         cg_layout.addWidget(QLabel("Soglia di Variazione (Anti-spam HA):"), 5, 0)
         thresh_box = QHBoxLayout()
         self.slider_change_thresh = QSlider(Qt.Orientation.Horizontal)
-        self.slider_change_thresh.setRange(1, 40)
-        self.slider_change_thresh.setValue(10)
-        self.lbl_change_thresh_val = QLabel("10")
+        self.slider_change_thresh.setRange(1, 30)
+        self.slider_change_thresh.setValue(8)
+        self.lbl_change_thresh_val = QLabel("8")
         self.lbl_change_thresh_val.setFixedWidth(35)
         self.slider_change_thresh.valueChanged.connect(lambda v: self.lbl_change_thresh_val.setText(str(v)))
         thresh_box.addWidget(self.slider_change_thresh)
@@ -469,8 +488,11 @@ class MainWindow(QMainWindow):
         self.spin_transition = QDoubleSpinBox()
         self.spin_transition.setRange(0.0, 3.0)
         self.spin_transition.setSingleStep(0.05)
-        self.spin_transition.setValue(0.3)
+        self.spin_transition.setValue(0.0)
         trans_box.addWidget(self.spin_transition)
+        lbl_trans_hint = QLabel("(0.0 = istantaneo/senza ritardi)")
+        lbl_trans_hint.setStyleSheet("color: #888; font-size: 11px;")
+        trans_box.addWidget(lbl_trans_hint)
         trans_box.addStretch()
         cg_layout.addLayout(trans_box, 6, 1)
 
@@ -672,7 +694,6 @@ class MainWindow(QMainWindow):
                 selected_found = True
 
         if not selected_found and self.cmb_monitors.count() > 0:
-            # Default to index 1 if exists, else 0
             for i in range(self.cmb_monitors.count()):
                 if self.cmb_monitors.itemData(i) == 1:
                     self.cmb_monitors.setCurrentIndex(i)
@@ -688,7 +709,7 @@ class MainWindow(QMainWindow):
         self.txt_ha_url.setText(ha_cfg.get("url", "http://192.168.1.100:8123"))
         self.txt_ha_token.setText(ha_cfg.get("token", ""))
         self.txt_ha_entity.setText(ha_cfg.get("entity_id", "light.your_rgb_lamp"))
-        self.spin_ha_timeout.setValue(float(ha_cfg.get("timeout", 1.5)))
+        self.spin_ha_timeout.setValue(float(ha_cfg.get("timeout", 2.0)))
 
         # Capture Config
         cap_cfg = self.config.get("capture", {})
@@ -706,7 +727,7 @@ class MainWindow(QMainWindow):
         self.spin_sample_h.setValue(cap_cfg.get("sample_height", 36))
         self.chk_ignore_black.setChecked(cap_cfg.get("ignore_black_bars", True))
 
-        black_thresh = cap_cfg.get("black_threshold", 20)
+        black_thresh = cap_cfg.get("black_threshold", 18)
         self.slider_black_thresh.setValue(black_thresh)
         self.lbl_black_thresh_val.setText(str(black_thresh))
 
@@ -732,11 +753,11 @@ class MainWindow(QMainWindow):
         self.slider_smoothing.setValue(smooth)
         self.lbl_smoothing_val.setText(f"{smooth/100:.2f}")
 
-        change_th = cp_cfg.get("change_threshold", 10)
+        change_th = cp_cfg.get("change_threshold", 8)
         self.slider_change_thresh.setValue(change_th)
         self.lbl_change_thresh_val.setText(str(change_th))
 
-        self.spin_transition.setValue(float(cp_cfg.get("transition_time", 0.3)))
+        self.spin_transition.setValue(float(cp_cfg.get("transition_time", 0.0)))
 
     def get_settings_from_ui(self) -> dict:
         """Collects current UI values into a configuration dict."""
@@ -791,7 +812,7 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.config = json_copy = DEFAULT_CONFIG.copy()
+            self.config = DEFAULT_CONFIG.copy()
             self.load_settings_to_ui()
             self.append_log("INFO", "Parametri reimpostati ai valori predefiniti.")
 
@@ -824,7 +845,7 @@ class MainWindow(QMainWindow):
         def on_done(future_result):
             ok, msg = future_result
             self.btn_test_conn.setEnabled(True)
-            self.btn_test_conn.setText("⚡  Verifica Connessione a Home Assistant")
+            self.btn_test_conn.setText("⚡  Verifica Connessione")
             self.lbl_test_result.show()
             if ok:
                 self.lbl_test_result.setStyleSheet("background-color: #1e3d2f; color: #75f0a0; padding: 10px; border-radius: 6px; border: 1px solid #2e5d47;")
@@ -832,10 +853,41 @@ class MainWindow(QMainWindow):
                 self.append_log("INFO", f"Test Connessione riuscito: {msg}")
             else:
                 self.lbl_test_result.setStyleSheet("background-color: #3d1e1e; color: #f07575; padding: 10px; border-radius: 6px; border: 1px solid #5d2e2e;")
-                self.lbl_test_result.setText(f"✗ Errore di connessione: {msg}")
+                self.lbl_test_result.setText(f"✗ {msg}")
                 self.append_log("WARNING", f"Test Connessione fallito: {msg}")
 
-        # Run test asynchronously
+        thread = threading.Thread(target=lambda: on_done(run_test()))
+        thread.daemon = True
+        thread.start()
+
+    def send_test_color_to_lamp(self):
+        """Sends a test color directly to Home Assistant light to verify hardware response."""
+        ha_cfg = {
+            "url": self.txt_ha_url.text().strip(),
+            "token": self.txt_ha_token.text().strip(),
+            "entity_id": self.txt_ha_entity.text().strip(),
+            "timeout": self.spin_ha_timeout.value()
+        }
+        self.btn_test_light.setEnabled(False)
+        self.btn_test_light.setText("⏳ Invio...")
+
+        def run_test():
+            client = HomeAssistantClient(ha_cfg)
+            # Test color: Warm Orange
+            ok, msg = client.update_light((255, 140, 30), 220, 0.0)
+            return ok, msg
+
+        def on_done(future_result):
+            ok, msg = future_result
+            self.btn_test_light.setEnabled(True)
+            self.btn_test_light.setText("💡  Testa Luce (Invia Colore)")
+            if ok:
+                self.append_log("INFO", "💡 Colore di test arancione inviato con successo alla lampada!")
+                self.status_bar.showMessage("Colore inviato alla lampada!", 4000)
+            else:
+                self.append_log("ERROR", f"Impossibile inviare colore alla lampada: {msg}")
+                QMessageBox.warning(self, "Errore Test Luce", f"Impossibile inviare colore alla lampada: {msg}")
+
         thread = threading.Thread(target=lambda: on_done(run_test()))
         thread.daemon = True
         thread.start()
@@ -870,7 +922,6 @@ class MainWindow(QMainWindow):
 
         # Update UI state
         self.btn_toggle_sync.setText("⏹  Ferma Sincronizzazione")
-        self.btn_toggle_sync.setProperty("class", "running")
         self.btn_toggle_sync.setStyleSheet("""
             background-color: #d32f2f;
             color: white;
@@ -880,7 +931,8 @@ class MainWindow(QMainWindow):
             border-radius: 10px;
             padding: 10px 18px;
         """)
-        self.lbl_status_badge.setText("🟢  Stato: In esecuzione")
+        mon_idx = self.config["capture"]["monitor_index"]
+        self.lbl_status_badge.setText(f"🟢  In esecuzione (Monitor {mon_idx})")
         self.lbl_status_badge.setStyleSheet("color: #75f0a0; font-weight: bold;")
         self.status_bar.showMessage("Sincronizzazione schermo attiva")
 
