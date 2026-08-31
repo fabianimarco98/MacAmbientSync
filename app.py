@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QPalette
+from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QPalette, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QTabWidget, QLabel, QPushButton, QLineEdit,
@@ -27,13 +27,14 @@ from PIL import Image
 from screen_sync import (
     ColorProcessor, HomeAssistantClient,
     load_config, save_config, get_available_monitors,
+    has_screen_capture_permission, request_screen_capture_permission,
     DEFAULT_CONFIG, get_config_path, logger
 )
 
 
 class SyncWorker(QThread):
     """Background worker thread for capturing screen and sending colors to HA."""
-    color_updated = pyqtSignal(tuple, int, bool, str)  # (rgb, brightness, sent_to_ha, status_msg)
+    color_updated = pyqtSignal(tuple, int, bool, str, QImage)  # (rgb, brightness, sent_to_ha, status_msg, preview_qimage)
     error_occurred = pyqtSignal(str)
     log_emitted = pyqtSignal(str, str)  # (level, message)
 
@@ -65,7 +66,7 @@ class SyncWorker(QThread):
         monitor_idx = self.config.get("capture", {}).get("monitor_index", 1)
         transition = self.config.get("color_processing", {}).get("transition_time", 0.0)
 
-        self.log_emitted.emit("INFO", f"Avvio sincronizzazione schermo (Monitor: {monitor_idx}, FPS: {fps})")
+        self.log_emitted.emit("INFO", f"Avvio cattura schermo su Monitor {monitor_idx} ({fps} FPS)...")
 
         try:
             with mss.mss() as sct:
@@ -81,6 +82,11 @@ class SyncWorker(QThread):
                         sct_img = sct.grab(mon)
                         img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
                         img_small = img.resize((sw, sh), Image.Resampling.BILINEAR)
+
+                        # Create mini preview image (120x68) for the UI
+                        img_thumb = img_small.resize((120, 68), Image.Resampling.NEAREST)
+                        thumb_rgba = img_thumb.convert("RGBA").tobytes("raw", "RGBA")
+                        qimg_preview = QImage(thumb_rgba, 120, 68, QImage.Format.Format_RGBA8888)
 
                         # Process colors
                         rgb, brightness = self.processor.calculate_dominant_color(img_small)
@@ -98,7 +104,7 @@ class SyncWorker(QThread):
                                 status_msg = f"Errore HA: {msg}"
                                 self.log_emitted.emit("WARNING", f"Errore invio a Home Assistant: {msg}")
 
-                        self.color_updated.emit(rgb, brightness, sent, status_msg)
+                        self.color_updated.emit(rgb, brightness, sent, status_msg, qimg_preview)
 
                     except Exception as e:
                         err_str = f"Errore nel loop di cattura: {e}"
@@ -121,8 +127,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mac Ambient Sync")
-        self.resize(780, 700)
-        self.setMinimumSize(680, 600)
+        self.resize(800, 720)
+        self.setMinimumSize(700, 620)
 
         self.config = load_config()
         self.worker = None
@@ -131,23 +137,69 @@ class MainWindow(QMainWindow):
         self.load_settings_to_ui()
         self.apply_theme()
 
+        # Check screen recording permissions on macOS
+        self.check_permissions_and_warn()
+
         # Keyboard shortcuts
         QShortcut(QKeySequence("Ctrl+Q"), self, self.close)
         QShortcut(QKeySequence("Ctrl+W"), self, self.close)
+
+    def check_permissions_and_warn(self):
+        """Checks if screen recording permission is granted on macOS."""
+        has_perm = has_screen_capture_permission()
+        if not has_perm:
+            self.permission_banner.show()
+            self.append_log("WARNING", "⚠️ Permesso di Registrazione Schermo NON concesso! macOS nasconde le finestre e mostra solo lo sfondo.")
+            # Trigger system dialog
+            request_screen_capture_permission()
+        else:
+            self.permission_banner.hide()
+
+    def open_mac_privacy_settings(self):
+        """Opens macOS Privacy & Security -> Screen Recording settings."""
+        request_screen_capture_permission()
+        os.system('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"')
 
     def setup_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(18, 16, 18, 16)
-        main_layout.setSpacing(14)
+        main_layout.setSpacing(12)
+
+        # 0. PERMISSION WARNING BANNER (Shown if macOS blocks screen recording)
+        self.permission_banner = QFrame()
+        self.permission_banner.setObjectName("PermissionBanner")
+        self.permission_banner.setStyleSheet("""
+            #PermissionBanner {
+                background-color: #4a2800;
+                border: 1px solid #d97706;
+                border-radius: 8px;
+                padding: 4px;
+            }
+        """)
+        perm_layout = QHBoxLayout(self.permission_banner)
+        perm_layout.setContentsMargins(12, 8, 12, 8)
+        
+        lbl_perm = QLabel("⚠️ <b>Permesso Registrazione Schermo Mancante:</b> macOS sta bloccando le finestre e mostra solo lo sfondo viola.")
+        lbl_perm.setStyleSheet("color: #fde68a; font-size: 12px;")
+        lbl_perm.setWordWrap(True)
+        
+        btn_fix_perm = QPushButton("🔓 Abilita Permesso")
+        btn_fix_perm.setStyleSheet("background-color: #d97706; color: white; font-weight: bold; padding: 5px 12px;")
+        btn_fix_perm.clicked.connect(self.open_mac_privacy_settings)
+        
+        perm_layout.addWidget(lbl_perm, 1)
+        perm_layout.addWidget(btn_fix_perm)
+        main_layout.addWidget(self.permission_banner)
+        self.permission_banner.hide()
 
         # 1. TOP LIVE CONTROLS & STATUS CARD
         top_card = QFrame()
         top_card.setObjectName("TopCard")
         top_card_layout = QHBoxLayout(top_card)
         top_card_layout.setContentsMargins(16, 14, 16, 14)
-        top_card_layout.setSpacing(20)
+        top_card_layout.setSpacing(18)
 
         # Left: Big Start/Stop Button & State
         btn_box = QVBoxLayout()
@@ -162,6 +214,22 @@ class MainWindow(QMainWindow):
         self.lbl_status_badge.setObjectName("LblStatusBadge")
         btn_box.addWidget(self.lbl_status_badge)
         top_card_layout.addLayout(btn_box, 3)
+
+        # Center: Live Screen Capture Thumbnail
+        thumb_box = QVBoxLayout()
+        thumb_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_screen_thumb = QLabel("Anteprima Schermo")
+        self.lbl_screen_thumb.setFixedSize(120, 68)
+        self.lbl_screen_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_screen_thumb.setStyleSheet("background-color: #151518; border: 1px solid #444; border-radius: 6px; color: #666; font-size: 10px;")
+        
+        lbl_thumb_title = QLabel("Cattura Attuale")
+        lbl_thumb_title.setStyleSheet("color: #777; font-size: 10px;")
+        lbl_thumb_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        thumb_box.addWidget(self.lbl_screen_thumb)
+        thumb_box.addWidget(lbl_thumb_title)
+        top_card_layout.addLayout(thumb_box)
 
         # Right: Live Dominant Color Preview Swatch & Details
         preview_box = QHBoxLayout()
@@ -189,7 +257,7 @@ class MainWindow(QMainWindow):
         color_info_box.addWidget(self.lbl_ha_status)
         preview_box.addLayout(color_info_box)
 
-        top_card_layout.addLayout(preview_box, 4)
+        top_card_layout.addLayout(preview_box, 3)
         main_layout.addWidget(top_card)
 
         # 2. TABBED CONFIGURATION
@@ -386,12 +454,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(lb_group)
 
         # Permissions helper
-        perm_box = QHBoxLayout()
-        btn_open_perms = QPushButton("⚙️  Apri Preferenze Privacy Schermo macOS")
-        btn_open_perms.setToolTip("Consenti a MacAmbientSync l'accesso alla registrazione schermo se non cattura i colori delle finestre")
-        btn_open_perms.clicked.connect(lambda: os.system('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"'))
-        perm_box.addWidget(btn_open_perms)
-        layout.addLayout(perm_box)
+        perm_group = QGroupBox("Permessi macOS")
+        perm_vbox = QVBoxLayout(perm_group)
+        perm_label = QLabel("Se i colori catturati rimangono fissi sullo sfondo viola e non riflettono i video/finestre aperte, macOS richiede che l'app sia autorizzata in <i>Privacy e Sicurezza → Registrazione Schermo</i>.")
+        perm_label.setWordWrap(True)
+        perm_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        perm_vbox.addWidget(perm_label)
+        
+        btn_open_perms = QPushButton("⚙️  Apri Preferenze Privacy e Sicurezza macOS")
+        btn_open_perms.clicked.connect(self.open_mac_privacy_settings)
+        perm_vbox.addWidget(btn_open_perms)
+        layout.addWidget(perm_group)
 
         layout.addStretch()
 
@@ -912,6 +985,9 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(0)
             return
 
+        # Check permissions
+        self.check_permissions_and_warn()
+
         # Start worker thread
         self.worker = SyncWorker(self.config)
         self.worker.color_updated.connect(self.on_color_updated)
@@ -960,8 +1036,8 @@ class MainWindow(QMainWindow):
         self.lbl_ha_status.setText("Sincronizzazione fermata")
         self.status_bar.showMessage("Sincronizzazione fermata")
 
-    def on_color_updated(self, rgb, brightness, sent, status_msg):
-        """Updates color swatch and labels."""
+    def on_color_updated(self, rgb, brightness, sent, status_msg, qimg_preview):
+        """Updates color swatch, labels, and mini screen thumbnail."""
         r, g, b = rgb
         hex_code = f"#{r:02X}{g:02X}{b:02X}"
         self.color_swatch.setStyleSheet(
@@ -971,6 +1047,15 @@ class MainWindow(QMainWindow):
         self.lbl_color_hex.setText(f"HEX: {hex_code}")
         pct = int(round((brightness / 255.0) * 100))
         self.lbl_brightness_val.setText(f"Luminosità: {pct}% ({brightness}/255)")
+
+        # Update thumbnail preview
+        if not qimg_preview.isNull():
+            pix = QPixmap.fromImage(qimg_preview).scaled(
+                120, 68,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.lbl_screen_thumb.setPixmap(pix)
 
         if sent:
             self.lbl_ha_status.setText("● Inviato a Home Assistant")

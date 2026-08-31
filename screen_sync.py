@@ -67,6 +67,36 @@ DEFAULT_CONFIG = {
 }
 
 
+def has_screen_capture_permission() -> bool:
+    """Checks if macOS Screen Recording permission is granted."""
+    try:
+        import ctypes
+        import ctypes.util
+        cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
+        preflight = getattr(cg, "CGPreflightScreenCaptureAccess", None)
+        if preflight:
+            preflight.restype = ctypes.c_bool
+            return bool(preflight())
+    except Exception as e:
+        logger.debug(f"Permission check error: {e}")
+    return True
+
+
+def request_screen_capture_permission() -> bool:
+    """Explicitly requests Screen Recording permission from macOS."""
+    try:
+        import ctypes
+        import ctypes.util
+        cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
+        request_access = getattr(cg, "CGRequestScreenCaptureAccess", None)
+        if request_access:
+            request_access.restype = ctypes.c_bool
+            return bool(request_access())
+    except Exception as e:
+        logger.debug(f"Permission request error: {e}")
+    return False
+
+
 def get_config_path() -> Path:
     """Returns the path to the configuration file in Application Support."""
     app_support_dir = Path.home() / "Library" / "Application Support" / "MacAmbientSync"
