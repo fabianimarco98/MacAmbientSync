@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QPalette, QImage, QPixmap, QCursor
+from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QPalette, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QTabWidget, QLabel, QPushButton, QLineEdit,
@@ -80,7 +80,7 @@ class SyncWorker(QThread):
         self.processor.reset()
         self.processor.force_next_update = True
 
-        self.log_emitted.emit("INFO", "Avvio motore di sincronizzazione schermo...")
+        self.log_emitted.emit("INFO", "Avvio cattura e sincronizzazione schermo...")
 
         try:
             with mss.mss() as sct:
@@ -91,33 +91,19 @@ class SyncWorker(QThread):
                         sleep_interval = 1.0 / fps
                         sw = self.config.get("capture", {}).get("sample_width", 64)
                         sh = self.config.get("capture", {}).get("sample_height", 36)
-                        monitor_idx = self.config.get("capture", {}).get("monitor_index", -1)
+                        monitor_idx = self.config.get("capture", {}).get("monitor_index", 2)
                         transition = self.config.get("color_processing", {}).get("transition_time", 0.3)
 
-                        # Determine target monitor dynamically
-                        active_mon_name = "Monitor"
-                        if monitor_idx == -1:
-                            # Auto-mode: detect monitor containing mouse cursor
-                            pos = QCursor.pos()
-                            cx, cy = pos.x(), pos.y()
-                            chosen_mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-                            active_mon_name = "Auto"
-                            for idx in range(1, len(sct.monitors)):
-                                m = sct.monitors[idx]
-                                if m['left'] <= cx < m['left'] + m['width'] and m['top'] <= cy < m['top'] + m['height']:
-                                    chosen_mon = m
-                                    active_mon_name = f"Auto (Mon {idx})"
-                                    break
-                            mon = chosen_mon
-                        elif monitor_idx == 0:
+                        # Select target monitor fixed by index
+                        if monitor_idx == 0:
                             mon = sct.monitors[0]
                             active_mon_name = "Tutti i Monitor"
                         elif monitor_idx < len(sct.monitors):
                             mon = sct.monitors[monitor_idx]
                             active_mon_name = f"Monitor {monitor_idx}"
                         else:
-                            mon = sct.monitors[0]
-                            active_mon_name = "Monitor 0"
+                            mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                            active_mon_name = "Monitor Principale"
 
                         # Grab screenshot
                         sct_img = sct.grab(mon)
@@ -425,11 +411,11 @@ class MainWindow(QMainWindow):
         layout.setSpacing(14)
 
         # Monitor selector
-        mon_group = QGroupBox("Selezione Display e Modalità Cattura")
+        mon_group = QGroupBox("Selezione Display e Prestazioni")
         mon_layout = QGridLayout(mon_group)
         mon_layout.setSpacing(12)
 
-        mon_layout.addWidget(QLabel("Schermo da Sincronizzare:"), 0, 0)
+        mon_layout.addWidget(QLabel("Schermo Fisso da Catturare:"), 0, 0)
         mon_selector_box = QHBoxLayout()
         self.cmb_monitors = QComboBox()
         self.cmb_monitors.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -499,7 +485,7 @@ class MainWindow(QMainWindow):
         # Permissions helper
         perm_group = QGroupBox("Permessi macOS")
         perm_vbox = QVBoxLayout(perm_group)
-        perm_label = QLabel("Se i colori catturati rimangono fissi sullo sfondo viola e non riflettono i video/finestre aperte, macOS richiede che l'app sia autorizzata in <i>Privacy e Sicurezza → Registrazione Schermo</i>.")
+        perm_label = QLabel("Se macOS visualizza solo lo sfondo e non le finestre aperte, assicurati che <b>MacAmbientSync</b> sia autorizzata in <i>Impostazioni di Sistema → Privacy e Sicurezza → Registrazione Schermo</i>.")
         perm_label.setWordWrap(True)
         perm_label.setStyleSheet("color: #aaa; font-size: 11px;")
         perm_vbox.addWidget(perm_label)
@@ -817,7 +803,15 @@ class MainWindow(QMainWindow):
                 selected_found = True
 
         if not selected_found and self.cmb_monitors.count() > 0:
-            self.cmb_monitors.setCurrentIndex(0)
+            # Default to monitor 2 if available (external display), else monitor 1
+            def_idx = 0
+            for i in range(self.cmb_monitors.count()):
+                if self.cmb_monitors.itemData(i) == 2:
+                    def_idx = i
+                    break
+                elif self.cmb_monitors.itemData(i) == 1:
+                    def_idx = i
+            self.cmb_monitors.setCurrentIndex(def_idx)
 
         self.cmb_monitors.blockSignals(False)
 
@@ -834,7 +828,7 @@ class MainWindow(QMainWindow):
 
         # Capture Config
         cap_cfg = self.config.get("capture", {})
-        target_mon = cap_cfg.get("monitor_index", -1)
+        target_mon = cap_cfg.get("monitor_index", 2)
         self.cmb_monitors.blockSignals(True)
         for i in range(self.cmb_monitors.count()):
             if self.cmb_monitors.itemData(i) == target_mon:
@@ -886,7 +880,7 @@ class MainWindow(QMainWindow):
         """Collects current UI values into a configuration dict."""
         mon_idx = self.cmb_monitors.currentData()
         if mon_idx is None:
-            mon_idx = -1
+            mon_idx = 2
 
         return {
             "home_assistant": {
@@ -1046,7 +1040,8 @@ class MainWindow(QMainWindow):
             border-radius: 10px;
             padding: 10px 18px;
         """)
-        self.lbl_status_badge.setText("🟢  In esecuzione")
+        mon_idx = self.config["capture"]["monitor_index"]
+        self.lbl_status_badge.setText(f"🟢  In esecuzione (Monitor {mon_idx})")
         self.lbl_status_badge.setStyleSheet("color: #75f0a0; font-weight: bold;")
         self.status_bar.showMessage("Sincronizzazione schermo attiva")
 

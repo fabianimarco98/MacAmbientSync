@@ -48,7 +48,7 @@ DEFAULT_CONFIG = {
         "timeout": 2.0
     },
     "capture": {
-        "monitor_index": -1,       # -1 = Automatic (follow mouse/active screen), 1 = Primary, 2 = Secondary, 0 = All
+        "monitor_index": 2,        # 2 = External Monitor, 1 = Built-in Display, 0 = All Combined
         "fps": 4,                  # 3-5 Hz is ideal for Wi-Fi / Zigbee lamps
         "sample_width": 64,        # Fast downscale for near-zero CPU load
         "sample_height": 36,
@@ -161,16 +161,6 @@ def get_available_monitors() -> list:
     """Discovers all connected monitors with friendly names and resolutions."""
     monitors_list = []
     
-    # Add Automatic option first
-    monitors_list.append({
-        "index": -1,
-        "name": "🎯 Automatico (Segue lo schermo del mouse / video attivo)",
-        "width": 0,
-        "height": 0,
-        "left": 0,
-        "top": 0
-    })
-
     try:
         from PyQt6.QtGui import QGuiApplication
         qt_screens = QGuiApplication.screens()
@@ -186,7 +176,7 @@ def get_available_monitors() -> list:
                 else:
                     screen_name = qt_names[idx - 1] if idx - 1 < len(qt_names) else ""
                     if "Built-in" in screen_name or idx == 1:
-                        disp_desc = f"Schermo Mac Integrato ({screen_name})" if screen_name else "Schermo Mac Integrato"
+                        disp_desc = "Schermo Integrato Mac"
                     else:
                         disp_desc = f"Display Esterno ({screen_name})" if screen_name else f"Display Esterno {idx}"
                     name = f"🖥️ Monitor {idx}: {disp_desc} ({mon['width']}x{mon['height']})"
@@ -448,9 +438,7 @@ def main():
     signal.signal(signal.SIGINT, handle_sigint)
 
     with mss.mss() as sct:
-        if monitor_idx == -1:
-            mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-        elif monitor_idx >= len(sct.monitors):
+        if monitor_idx >= len(sct.monitors):
             mon = sct.monitors[0]
         else:
             mon = sct.monitors[monitor_idx]
