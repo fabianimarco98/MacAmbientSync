@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QPalette, QImage, QPixmap
+from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QPalette, QImage, QPixmap, QCursor
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QTabWidget, QLabel, QPushButton, QLineEdit,
@@ -55,7 +55,7 @@ class TestTaskWorker(QThread):
 
 class SyncWorker(QThread):
     """Background worker thread for capturing screen and sending colors to HA."""
-    color_updated = pyqtSignal(tuple, int, bool, str, QImage)  # (rgb, brightness, sent_to_ha, status_msg, preview_qimage)
+    color_updated = pyqtSignal(tuple, int, bool, str, QImage, str)  # (rgb, brightness, sent_to_ha, status_msg, preview_qimage, active_mon_name)
     error_occurred = pyqtSignal(str)
     log_emitted = pyqtSignal(str, str)  # (level, message)
 
@@ -80,25 +80,45 @@ class SyncWorker(QThread):
         self.processor.reset()
         self.processor.force_next_update = True
 
-        fps = max(1, self.config.get("capture", {}).get("fps", 4))
-        sleep_interval = 1.0 / fps
-        sw = self.config.get("capture", {}).get("sample_width", 64)
-        sh = self.config.get("capture", {}).get("sample_height", 36)
-        monitor_idx = self.config.get("capture", {}).get("monitor_index", 1)
-        transition = self.config.get("color_processing", {}).get("transition_time", 0.3)
-
-        self.log_emitted.emit("INFO", f"Avvio cattura schermo su Monitor {monitor_idx} ({fps} FPS)...")
+        self.log_emitted.emit("INFO", "Avvio motore di sincronizzazione schermo...")
 
         try:
             with mss.mss() as sct:
-                if monitor_idx >= len(sct.monitors):
-                    mon = sct.monitors[0]
-                else:
-                    mon = sct.monitors[monitor_idx]
-
                 while self.running:
                     start_time = time.time()
                     try:
+                        fps = max(1, self.config.get("capture", {}).get("fps", 4))
+                        sleep_interval = 1.0 / fps
+                        sw = self.config.get("capture", {}).get("sample_width", 64)
+                        sh = self.config.get("capture", {}).get("sample_height", 36)
+                        monitor_idx = self.config.get("capture", {}).get("monitor_index", -1)
+                        transition = self.config.get("color_processing", {}).get("transition_time", 0.3)
+
+                        # Determine target monitor dynamically
+                        active_mon_name = "Monitor"
+                        if monitor_idx == -1:
+                            # Auto-mode: detect monitor containing mouse cursor
+                            pos = QCursor.pos()
+                            cx, cy = pos.x(), pos.y()
+                            chosen_mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                            active_mon_name = "Auto"
+                            for idx in range(1, len(sct.monitors)):
+                                m = sct.monitors[idx]
+                                if m['left'] <= cx < m['left'] + m['width'] and m['top'] <= cy < m['top'] + m['height']:
+                                    chosen_mon = m
+                                    active_mon_name = f"Auto (Mon {idx})"
+                                    break
+                            mon = chosen_mon
+                        elif monitor_idx == 0:
+                            mon = sct.monitors[0]
+                            active_mon_name = "Tutti i Monitor"
+                        elif monitor_idx < len(sct.monitors):
+                            mon = sct.monitors[monitor_idx]
+                            active_mon_name = f"Monitor {monitor_idx}"
+                        else:
+                            mon = sct.monitors[0]
+                            active_mon_name = "Monitor 0"
+
                         # Grab screenshot
                         sct_img = sct.grab(mon)
                         img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
@@ -120,12 +140,12 @@ class SyncWorker(QThread):
                             sent = True
                             if success:
                                 status_msg = "Inviato a Home Assistant"
-                                self.log_emitted.emit("INFO", f"🎨 Colore inviato: RGB{rgb} - Lum: {brightness}/255")
+                                self.log_emitted.emit("INFO", f"🎨 Colore inviato: RGB{rgb} - Lum: {brightness}/255 ({active_mon_name})")
                             else:
                                 status_msg = f"Errore HA: {msg}"
                                 self.log_emitted.emit("WARNING", f"Errore invio a Home Assistant: {msg}")
 
-                        self.color_updated.emit(rgb, brightness, sent, status_msg, qimg_preview)
+                        self.color_updated.emit(rgb, brightness, sent, status_msg, qimg_preview, active_mon_name)
 
                     except Exception as e:
                         err_str = f"Errore nel loop di cattura: {e}"
@@ -244,12 +264,12 @@ class MainWindow(QMainWindow):
         self.lbl_screen_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_screen_thumb.setStyleSheet("background-color: #151518; border: 1px solid #444; border-radius: 6px; color: #666; font-size: 10px;")
         
-        lbl_thumb_title = QLabel("Cattura Attuale")
-        lbl_thumb_title.setStyleSheet("color: #777; font-size: 10px;")
-        lbl_thumb_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_thumb_title = QLabel("Cattura Attuale")
+        self.lbl_thumb_title.setStyleSheet("color: #777; font-size: 10px;")
+        self.lbl_thumb_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         thumb_box.addWidget(self.lbl_screen_thumb)
-        thumb_box.addWidget(lbl_thumb_title)
+        thumb_box.addWidget(self.lbl_thumb_title)
         top_card_layout.addLayout(thumb_box)
 
         # Right: Live Dominant Color Preview Swatch & Details
@@ -405,17 +425,19 @@ class MainWindow(QMainWindow):
         layout.setSpacing(14)
 
         # Monitor selector
-        mon_group = QGroupBox("Selezione Display e Prestazioni")
+        mon_group = QGroupBox("Selezione Display e Modalità Cattura")
         mon_layout = QGridLayout(mon_group)
         mon_layout.setSpacing(12)
 
-        mon_layout.addWidget(QLabel("Monitor da Catturare:"), 0, 0)
+        mon_layout.addWidget(QLabel("Schermo da Sincronizzare:"), 0, 0)
         mon_selector_box = QHBoxLayout()
         self.cmb_monitors = QComboBox()
         self.cmb_monitors.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.cmb_monitors.currentIndexChanged.connect(self.on_monitor_selection_changed)
+        
         self.btn_refresh_monitors = QPushButton("🔄")
         self.btn_refresh_monitors.setFixedWidth(36)
-        self.btn_refresh_monitors.setToolTip("Aggiorna elenco display")
+        self.btn_refresh_monitors.setToolTip("Rileva nuovamente i monitor collegati")
         self.btn_refresh_monitors.clicked.connect(self.refresh_monitors)
         mon_selector_box.addWidget(self.cmb_monitors)
         mon_selector_box.addWidget(self.btn_refresh_monitors)
@@ -772,9 +794,19 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    def on_monitor_selection_changed(self):
+        """Called when user changes monitor in the dropdown."""
+        mon_idx = self.cmb_monitors.currentData()
+        if mon_idx is not None:
+            self.config["capture"]["monitor_index"] = mon_idx
+            if self.worker and self.worker.isRunning():
+                self.worker.update_config(self.config)
+            save_config(self.get_settings_from_ui())
+
     def refresh_monitors(self):
         """Populates the monitors dropdown."""
         curr_idx = self.cmb_monitors.currentData()
+        self.cmb_monitors.blockSignals(True)
         self.cmb_monitors.clear()
         monitors = get_available_monitors()
         selected_found = False
@@ -785,10 +817,9 @@ class MainWindow(QMainWindow):
                 selected_found = True
 
         if not selected_found and self.cmb_monitors.count() > 0:
-            for i in range(self.cmb_monitors.count()):
-                if self.cmb_monitors.itemData(i) == 1:
-                    self.cmb_monitors.setCurrentIndex(i)
-                    break
+            self.cmb_monitors.setCurrentIndex(0)
+
+        self.cmb_monitors.blockSignals(False)
 
     def load_settings_to_ui(self):
         """Loads values from self.config into the input fields."""
@@ -803,11 +834,13 @@ class MainWindow(QMainWindow):
 
         # Capture Config
         cap_cfg = self.config.get("capture", {})
-        target_mon = cap_cfg.get("monitor_index", 1)
+        target_mon = cap_cfg.get("monitor_index", -1)
+        self.cmb_monitors.blockSignals(True)
         for i in range(self.cmb_monitors.count()):
             if self.cmb_monitors.itemData(i) == target_mon:
                 self.cmb_monitors.setCurrentIndex(i)
                 break
+        self.cmb_monitors.blockSignals(False)
 
         fps = cap_cfg.get("fps", 4)
         self.slider_fps.setValue(fps)
@@ -853,7 +886,7 @@ class MainWindow(QMainWindow):
         """Collects current UI values into a configuration dict."""
         mon_idx = self.cmb_monitors.currentData()
         if mon_idx is None:
-            mon_idx = 1
+            mon_idx = -1
 
         return {
             "home_assistant": {
@@ -1013,8 +1046,7 @@ class MainWindow(QMainWindow):
             border-radius: 10px;
             padding: 10px 18px;
         """)
-        mon_idx = self.config["capture"]["monitor_index"]
-        self.lbl_status_badge.setText(f"🟢  In esecuzione (Monitor {mon_idx})")
+        self.lbl_status_badge.setText("🟢  In esecuzione")
         self.lbl_status_badge.setStyleSheet("color: #75f0a0; font-weight: bold;")
         self.status_bar.showMessage("Sincronizzazione schermo attiva")
 
@@ -1042,7 +1074,7 @@ class MainWindow(QMainWindow):
         self.lbl_ha_status.setText("Sincronizzazione fermata")
         self.status_bar.showMessage("Sincronizzazione fermata")
 
-    def on_color_updated(self, rgb, brightness, sent, status_msg, qimg_preview):
+    def on_color_updated(self, rgb, brightness, sent, status_msg, qimg_preview, active_mon_name):
         """Updates color swatch, labels, and mini screen thumbnail."""
         r, g, b = rgb
         hex_code = f"#{r:02X}{g:02X}{b:02X}"
@@ -1054,7 +1086,7 @@ class MainWindow(QMainWindow):
         pct = int(round((brightness / 255.0) * 100))
         self.lbl_brightness_val.setText(f"Luminosità: {pct}% ({brightness}/255)")
 
-        # Update thumbnail preview
+        # Update thumbnail preview and active monitor name
         if not qimg_preview.isNull():
             pix = QPixmap.fromImage(qimg_preview).scaled(
                 120, 68,
@@ -1062,6 +1094,7 @@ class MainWindow(QMainWindow):
                 Qt.TransformationMode.SmoothTransformation
             )
             self.lbl_screen_thumb.setPixmap(pix)
+            self.lbl_thumb_title.setText(f"Cattura: {active_mon_name}")
 
         if sent:
             self.lbl_ha_status.setText("● Inviato a Home Assistant")
