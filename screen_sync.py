@@ -2,7 +2,7 @@
 """
 Mac Screen Ambient Sync -> Home Assistant
 Captures the Mac screen in real-time, calculates the dominant/average color
-of the scene (with cinematic saturation and black bar/letterbox removal)
+of the scene (with cinematic saturation, chroma weighting and black bar removal)
 and synchronizes the RGB lamp in Home Assistant.
 """
 
@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
         "sample_width": 64,        # Fast downscale for near-zero CPU load
         "sample_height": 36,
         "ignore_black_bars": True, # Removes movie black bars (letterbox)
-        "black_threshold": 18      # Minimum brightness to consider a pixel non-black
+        "black_threshold": 16      # Minimum brightness to consider a pixel non-black
     },
     "color_processing": {
         "saturation_boost": 1.35,  # Boosts colors for a vivid cinematic effect
@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
         "min_brightness": 25,      # Minimum brightness so lamp stays visible in dark scenes
         "max_brightness": 255,     # Maximum brightness
         "smoothing_factor": 0.35,  # 0.1 = ultra smooth, 0.9 = reactive/instant
-        "change_threshold": 8,     # Minimum RGB difference before sending HA request
+        "change_threshold": 6,     # Lower threshold for high responsiveness
         "transition_time": 0.0     # 0.0 is best for responsive streaming without lag
     }
 }
@@ -166,9 +166,9 @@ def get_available_monitors() -> list:
                 if idx == 0:
                     name = f"Tutti i monitor uniti ({mon['width']}x{mon['height']})"
                 elif idx == 1:
-                    name = f"Monitor 1 - Principale ({mon['width']}x{mon['height']})"
+                    name = f"Monitor 1 - Principale Mac ({mon['width']}x{mon['height']})"
                 else:
-                    name = f"Monitor {idx} ({mon['width']}x{mon['height']})"
+                    name = f"Monitor {idx} - Display Esterno ({mon['width']}x{mon['height']})"
                 monitors_list.append({
                     "index": idx,
                     "name": name,
@@ -205,61 +205,82 @@ class ColorProcessor:
         self.last_sent_time = 0
 
     def calculate_dominant_color(self, pil_image):
-        """Extracts the average dominant color, filtering black bars and boosting saturation."""
+        """
+        Extracts the dominant scene color using chroma-weighting (Ambilight algorithm).
+        Vibrant and active areas take precedence over dark/neutral backgrounds.
+        """
         img = pil_image.convert("RGB")
         pixels = list(img.getdata())
         
-        r_total, g_total, b_total = 0, 0, 0
-        valid_pixels = 0
-        black_thresh = self.cfg.get("capture", {}).get("black_threshold", 18)
+        black_thresh = self.cfg.get("capture", {}).get("black_threshold", 16)
         ignore_black = self.cfg.get("capture", {}).get("ignore_black_bars", True)
 
+        total_weight = 0.0
+        weighted_r, weighted_g, weighted_b = 0.0, 0.0, 0.0
+        valid_pixels = 0
+
         for r, g, b in pixels:
-            # Calculate apparent luminance
             luminance = 0.299 * r + 0.587 * g + 0.114 * b
             if ignore_black and luminance < black_thresh:
                 continue
-            r_total += r
-            g_total += g
-            b_total += b
+
+            h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            
+            # Chroma-weighting: saturated, bright pixels contribute much more than dark neutral grays
+            weight = (s ** 1.3) * (v ** 1.0) + 0.08
+            weighted_r += r * weight
+            weighted_g += g * weight
+            weighted_b += b * weight
+            total_weight += weight
             valid_pixels += 1
 
-        # If the screen is almost entirely black
-        if valid_pixels == 0:
-            avg_r, avg_g, avg_b = 8, 8, 12
-            brightness = self.cfg.get("color_processing", {}).get("min_brightness", 25)
+        # Fallback if entire screen was filtered out as black
+        if valid_pixels == 0 or total_weight == 0:
+            avg_r = sum(p[0] for p in pixels) / max(1, len(pixels))
+            avg_g = sum(p[1] for p in pixels) / max(1, len(pixels))
+            avg_b = sum(p[2] for p in pixels) / max(1, len(pixels))
         else:
-            avg_r = r_total / valid_pixels
-            avg_g = g_total / valid_pixels
-            avg_b = b_total / valid_pixels
-            
-            # Boost color saturation (RGB -> HSV -> Boost S -> RGB)
-            sat_boost = self.cfg.get("color_processing", {}).get("saturation_boost", 1.35)
-            bright_boost = self.cfg.get("color_processing", {}).get("brightness_boost", 1.10)
-            
-            h, s, v = colorsys.rgb_to_hsv(avg_r / 255.0, avg_g / 255.0, avg_b / 255.0)
+            avg_r = weighted_r / total_weight
+            avg_g = weighted_g / total_weight
+            avg_b = weighted_b / total_weight
+
+        # Convert average color to HSV for boosting
+        h, s, v = colorsys.rgb_to_hsv(avg_r / 255.0, avg_g / 255.0, avg_b / 255.0)
+        
+        sat_boost = self.cfg.get("color_processing", {}).get("saturation_boost", 1.35)
+        bright_boost = self.cfg.get("color_processing", {}).get("brightness_boost", 1.10)
+
+        # Smart Saturation Boost:
+        # Only boost saturation if there is true color (s > 0.08).
+        # Near-grayscale images (dark mode, text, documents) stay clean neutral without false purple tint.
+        if s > 0.08:
             s = min(1.0, s * sat_boost)
-            v = min(1.0, v * bright_boost)
-            r_boost, g_boost, b_boost = colorsys.hsv_to_rgb(h, s, v)
-            
-            avg_r, avg_g, avg_b = r_boost * 255.0, g_boost * 255.0, b_boost * 255.0
-            
-            # Dynamic brightness scaled to limits
-            raw_brightness = int(v * 255)
-            min_b = self.cfg.get("color_processing", {}).get("min_brightness", 25)
-            max_b = self.cfg.get("color_processing", {}).get("max_brightness", 255)
-            brightness = max(min_b, min(max_b, raw_brightness))
+        else:
+            s = s * 0.75  # Clean neutral tone
+
+        v = min(1.0, v * bright_boost)
+        r_boost, g_boost, b_boost = colorsys.hsv_to_rgb(h, s, v)
+
+        # Dynamic brightness scaled to limits
+        raw_brightness = int(v * 255)
+        min_b = self.cfg.get("color_processing", {}).get("min_brightness", 25)
+        max_b = self.cfg.get("color_processing", {}).get("max_brightness", 255)
+        brightness = max(min_b, min(max_b, raw_brightness))
 
         # Exponential Smoothing (EMA)
         alpha = self.cfg.get("color_processing", {}).get("smoothing_factor", 0.35)
+        target_r = r_boost * 255.0
+        target_g = g_boost * 255.0
+        target_b = b_boost * 255.0
+
         if self.first_run:
-            self.smoothed_rgb = [avg_r, avg_g, avg_b]
+            self.smoothed_rgb = [target_r, target_g, target_b]
             self.smoothed_brightness = float(brightness)
             self.first_run = False
         else:
-            for i in range(3):
-                target = [avg_r, avg_g, avg_b][i]
-                self.smoothed_rgb[i] = alpha * target + (1 - alpha) * self.smoothed_rgb[i]
+            self.smoothed_rgb[0] = alpha * target_r + (1 - alpha) * self.smoothed_rgb[0]
+            self.smoothed_rgb[1] = alpha * target_g + (1 - alpha) * self.smoothed_rgb[1]
+            self.smoothed_rgb[2] = alpha * target_b + (1 - alpha) * self.smoothed_rgb[2]
             self.smoothed_brightness = alpha * brightness + (1 - alpha) * self.smoothed_brightness
 
         final_r = max(0, min(255, int(round(self.smoothed_rgb[0]))))
@@ -281,7 +302,7 @@ class ColorProcessor:
             self.last_sent_time = now
             return True
 
-        thresh = self.cfg.get("color_processing", {}).get("change_threshold", 8)
+        thresh = self.cfg.get("color_processing", {}).get("change_threshold", 6)
         diff_r = abs(new_rgb[0] - self.prev_rgb[0])
         diff_g = abs(new_rgb[1] - self.prev_rgb[1])
         diff_b = abs(new_rgb[2] - self.prev_rgb[2])
