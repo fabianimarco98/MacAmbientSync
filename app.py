@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import time
-import threading
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
@@ -30,6 +29,28 @@ from screen_sync import (
     has_screen_capture_permission, request_screen_capture_permission,
     DEFAULT_CONFIG, get_config_path, logger
 )
+
+
+class TestTaskWorker(QThread):
+    """Thread-safe worker for connection test and lamp test."""
+    test_finished = pyqtSignal(bool, str, str)  # (success, message, task_type)
+
+    def __init__(self, task_type, ha_cfg):
+        super().__init__()
+        self.task_type = task_type
+        self.ha_cfg = ha_cfg
+
+    def run(self):
+        try:
+            client = HomeAssistantClient(self.ha_cfg)
+            if self.task_type == "test_conn":
+                ok, msg = client.test_connection()
+                self.test_finished.emit(ok, msg, self.task_type)
+            elif self.task_type == "test_light":
+                ok, msg = client.update_light((255, 140, 30), 220, 0.3)
+                self.test_finished.emit(ok, msg, self.task_type)
+        except Exception as e:
+            self.test_finished.emit(False, str(e), self.task_type)
 
 
 class SyncWorker(QThread):
@@ -59,12 +80,12 @@ class SyncWorker(QThread):
         self.processor.reset()
         self.processor.force_next_update = True
 
-        fps = max(1, self.config.get("capture", {}).get("fps", 5))
+        fps = max(1, self.config.get("capture", {}).get("fps", 4))
         sleep_interval = 1.0 / fps
         sw = self.config.get("capture", {}).get("sample_width", 64)
         sh = self.config.get("capture", {}).get("sample_height", 36)
         monitor_idx = self.config.get("capture", {}).get("monitor_index", 1)
-        transition = self.config.get("color_processing", {}).get("transition_time", 0.0)
+        transition = self.config.get("color_processing", {}).get("transition_time", 0.3)
 
         self.log_emitted.emit("INFO", f"Avvio cattura schermo su Monitor {monitor_idx} ({fps} FPS)...")
 
@@ -132,6 +153,7 @@ class MainWindow(QMainWindow):
 
         self.config = load_config()
         self.worker = None
+        self.test_worker = None
 
         self.setup_ui()
         self.load_settings_to_ui()
@@ -150,7 +172,6 @@ class MainWindow(QMainWindow):
         if not has_perm:
             self.permission_banner.show()
             self.append_log("WARNING", "⚠️ Permesso di Registrazione Schermo NON concesso! macOS nasconde le finestre e mostra solo lo sfondo.")
-            # Trigger system dialog
             request_screen_capture_permission()
         else:
             self.permission_banner.hide()
@@ -167,7 +188,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(18, 16, 18, 16)
         main_layout.setSpacing(12)
 
-        # 0. PERMISSION WARNING BANNER (Shown if macOS blocks screen recording)
+        # 0. PERMISSION WARNING BANNER
         self.permission_banner = QFrame()
         self.permission_banner.setObjectName("PermissionBanner")
         self.permission_banner.setStyleSheet("""
@@ -405,8 +426,8 @@ class MainWindow(QMainWindow):
         fps_box = QHBoxLayout()
         self.slider_fps = QSlider(Qt.Orientation.Horizontal)
         self.slider_fps.setRange(1, 15)
-        self.slider_fps.setValue(5)
-        self.lbl_fps_val = QLabel("5 Hz")
+        self.slider_fps.setValue(4)
+        self.lbl_fps_val = QLabel("4 Hz")
         self.lbl_fps_val.setFixedWidth(45)
         self.slider_fps.valueChanged.connect(lambda v: self.lbl_fps_val.setText(f"{v} Hz"))
         fps_box.addWidget(self.slider_fps)
@@ -561,11 +582,8 @@ class MainWindow(QMainWindow):
         self.spin_transition = QDoubleSpinBox()
         self.spin_transition.setRange(0.0, 3.0)
         self.spin_transition.setSingleStep(0.05)
-        self.spin_transition.setValue(0.0)
+        self.spin_transition.setValue(0.3)
         trans_box.addWidget(self.spin_transition)
-        lbl_trans_hint = QLabel("(0.0 = istantaneo/senza ritardi)")
-        lbl_trans_hint.setStyleSheet("color: #888; font-size: 11px;")
-        trans_box.addWidget(lbl_trans_hint)
         trans_box.addStretch()
         cg_layout.addLayout(trans_box, 6, 1)
 
@@ -774,7 +792,6 @@ class MainWindow(QMainWindow):
 
     def load_settings_to_ui(self):
         """Loads values from self.config into the input fields."""
-        # Refresh monitors
         self.refresh_monitors()
 
         # HA Config
@@ -792,7 +809,7 @@ class MainWindow(QMainWindow):
                 self.cmb_monitors.setCurrentIndex(i)
                 break
 
-        fps = cap_cfg.get("fps", 5)
+        fps = cap_cfg.get("fps", 4)
         self.slider_fps.setValue(fps)
         self.lbl_fps_val.setText(f"{fps} Hz")
 
@@ -830,7 +847,7 @@ class MainWindow(QMainWindow):
         self.slider_change_thresh.setValue(change_th)
         self.lbl_change_thresh_val.setText(str(change_th))
 
-        self.spin_transition.setValue(float(cp_cfg.get("transition_time", 0.0)))
+        self.spin_transition.setValue(float(cp_cfg.get("transition_time", 0.3)))
 
     def get_settings_from_ui(self) -> dict:
         """Collects current UI values into a configuration dict."""
@@ -898,7 +915,7 @@ class MainWindow(QMainWindow):
             self.btn_toggle_token.setText("👁️")
 
     def test_ha_connection(self):
-        """Tests Home Assistant API in a separate thread so UI does not freeze."""
+        """Thread-safe connection test using QThread."""
         ha_cfg = {
             "url": self.txt_ha_url.text().strip(),
             "token": self.txt_ha_token.text().strip(),
@@ -910,13 +927,28 @@ class MainWindow(QMainWindow):
         self.btn_test_conn.setText("⏳ Verifica in corso...")
         self.lbl_test_result.hide()
 
-        def run_test():
-            client = HomeAssistantClient(ha_cfg)
-            ok, msg = client.test_connection()
-            return ok, msg
+        self.test_worker = TestTaskWorker("test_conn", ha_cfg)
+        self.test_worker.test_finished.connect(self.on_test_task_finished)
+        self.test_worker.start()
 
-        def on_done(future_result):
-            ok, msg = future_result
+    def send_test_color_to_lamp(self):
+        """Thread-safe test color sending using QThread."""
+        ha_cfg = {
+            "url": self.txt_ha_url.text().strip(),
+            "token": self.txt_ha_token.text().strip(),
+            "entity_id": self.txt_ha_entity.text().strip(),
+            "timeout": self.spin_ha_timeout.value()
+        }
+        self.btn_test_light.setEnabled(False)
+        self.btn_test_light.setText("⏳ Invio...")
+
+        self.test_worker = TestTaskWorker("test_light", ha_cfg)
+        self.test_worker.test_finished.connect(self.on_test_task_finished)
+        self.test_worker.start()
+
+    def on_test_task_finished(self, ok, msg, task_type):
+        """Safely called on the Qt Main UI thread upon task completion."""
+        if task_type == "test_conn":
             self.btn_test_conn.setEnabled(True)
             self.btn_test_conn.setText("⚡  Verifica Connessione")
             self.lbl_test_result.show()
@@ -929,29 +961,7 @@ class MainWindow(QMainWindow):
                 self.lbl_test_result.setText(f"✗ {msg}")
                 self.append_log("WARNING", f"Test Connessione fallito: {msg}")
 
-        thread = threading.Thread(target=lambda: on_done(run_test()))
-        thread.daemon = True
-        thread.start()
-
-    def send_test_color_to_lamp(self):
-        """Sends a test color directly to Home Assistant light to verify hardware response."""
-        ha_cfg = {
-            "url": self.txt_ha_url.text().strip(),
-            "token": self.txt_ha_token.text().strip(),
-            "entity_id": self.txt_ha_entity.text().strip(),
-            "timeout": self.spin_ha_timeout.value()
-        }
-        self.btn_test_light.setEnabled(False)
-        self.btn_test_light.setText("⏳ Invio...")
-
-        def run_test():
-            client = HomeAssistantClient(ha_cfg)
-            # Test color: Warm Orange
-            ok, msg = client.update_light((255, 140, 30), 220, 0.0)
-            return ok, msg
-
-        def on_done(future_result):
-            ok, msg = future_result
+        elif task_type == "test_light":
             self.btn_test_light.setEnabled(True)
             self.btn_test_light.setText("💡  Testa Luce (Invia Colore)")
             if ok:
@@ -960,10 +970,6 @@ class MainWindow(QMainWindow):
             else:
                 self.append_log("ERROR", f"Impossibile inviare colore alla lampada: {msg}")
                 QMessageBox.warning(self, "Errore Test Luce", f"Impossibile inviare colore alla lampada: {msg}")
-
-        thread = threading.Thread(target=lambda: on_done(run_test()))
-        thread.daemon = True
-        thread.start()
 
     def toggle_sync(self):
         """Starts or stops the screen sync worker."""
