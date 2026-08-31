@@ -249,16 +249,20 @@ class ColorProcessor:
         return False
 
 
+import ssl
+
 class HomeAssistantClient:
     def __init__(self, ha_cfg):
         self.url = ha_cfg.get("url", "").rstrip("/")
         self.token = ha_cfg.get("token", "")
         self.entity_id = ha_cfg.get("entity_id", "")
-        self.timeout = ha_cfg.get("timeout", 1.5)
+        self.timeout = float(ha_cfg.get("timeout", 2.0))
         self.headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
+        # Permetti HTTPS anche con certificati self-signed su rete locale
+        self.ssl_context = ssl._create_unverified_context()
 
     def test_connection(self) -> tuple[bool, str]:
         """Tests connection to Home Assistant API and verifies entity status."""
@@ -271,7 +275,7 @@ class HomeAssistantClient:
         api_url = f"{self.url}/api/"
         req = urllib.request.Request(api_url, headers=self.headers, method="GET")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as resp:
                 if resp.status != 200:
                     return False, f"Risposta inattesa da Home Assistant: HTTP {resp.status}"
                 data = json.loads(resp.read().decode("utf-8"))
@@ -281,7 +285,10 @@ class HomeAssistantClient:
                 return False, "Errore 401: Token non valido o scaduto."
             return False, f"Errore HTTP {e.code}: {e.reason}"
         except urllib.error.URLError as e:
-            return False, f"Impossibile raggiungere Home Assistant: {e.reason}"
+            err_reason = str(e.reason)
+            if "timed out" in err_reason.lower():
+                return False, f"Timeout connessione verso {self.url}. Se usi una VPN (es. Cisco), disconnettila o consenti l'accesso alla rete locale."
+            return False, f"Impossibile raggiungere Home Assistant ({err_reason})."
         except Exception as e:
             return False, f"Errore di connessione: {e}"
 
@@ -290,17 +297,17 @@ class HomeAssistantClient:
             entity_url = f"{self.url}/api/states/{self.entity_id}"
             req_ent = urllib.request.Request(entity_url, headers=self.headers, method="GET")
             try:
-                with urllib.request.urlopen(req_ent, timeout=self.timeout) as resp:
+                with urllib.request.urlopen(req_ent, timeout=self.timeout, context=self.ssl_context) as resp:
                     if resp.status == 200:
                         ent_data = json.loads(resp.read().decode("utf-8"))
                         friendly_name = ent_data.get("attributes", {}).get("friendly_name", self.entity_id)
                         state = ent_data.get("state", "unknown")
-                        return True, f"Connesso! Entità '{friendly_name}' trovata (Stato: {state})."
+                        return True, f"Connesso con successo! Entità '{friendly_name}' trovata (Stato: {state})."
                     else:
                         return False, f"Entità '{self.entity_id}' non trovata (HTTP {resp.status})."
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return False, f"Entità '{self.entity_id}' non esiste su Home Assistant."
+                    return False, f"Entità '{self.entity_id}' non trovata su Home Assistant."
                 return True, f"API Connessa ({message}), ma errore entità: {e.reason}"
             except Exception as e:
                 return True, f"API Connessa, ma errore lettura stato entità: {e}"
@@ -319,7 +326,7 @@ class HomeAssistantClient:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(service_url, data=data, headers=self.headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as resp:
                 if resp.status == 200:
                     return True, "OK"
                 return False, f"HTTP {resp.status}"
@@ -330,6 +337,7 @@ class HomeAssistantClient:
         except Exception as e:
             logger.debug(f"Network error to HA: {e}")
             return False, str(e)
+
 
 
 def main():
