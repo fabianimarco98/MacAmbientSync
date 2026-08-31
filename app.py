@@ -115,7 +115,7 @@ class SyncWorker(QThread):
                         thumb_rgba = img_thumb.convert("RGBA").tobytes("raw", "RGBA")
                         qimg_preview = QImage(thumb_rgba, 120, 68, QImage.Format.Format_RGBA8888)
 
-                        # Process colors
+                        # Process colors using exact tested formula
                         rgb, brightness = self.processor.calculate_dominant_color(img_small)
 
                         # Check if should update Home Assistant
@@ -171,6 +171,16 @@ class MainWindow(QMainWindow):
         # Keyboard shortcuts
         QShortcut(QKeySequence("Ctrl+Q"), self, self.close)
         QShortcut(QKeySequence("Ctrl+W"), self, self.close)
+
+        # Auto-start synchronization on app launch
+        QTimer.singleShot(400, self.auto_start_if_configured)
+
+    def auto_start_if_configured(self):
+        """Automatically starts screen sync upon application launch if valid credentials exist."""
+        ha_cfg = self.config.get("home_assistant", {})
+        token = ha_cfg.get("token", "")
+        if token and "INSERISCI" not in token and "INSERT" not in token:
+            self.start_sync()
 
     def check_permissions_and_warn(self):
         """Checks if screen recording permission is granted on macOS."""
@@ -572,12 +582,12 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(smooth_box, 4, 1)
 
         # Change threshold (sensitivity)
-        cg_layout.addWidget(QLabel("Soglia di Variazione (Anti-spam HA):"), 5, 0)
+        cg_layout.addWidget(QLabel("Soglia di Variazione (Sensibilità):"), 5, 0)
         thresh_box = QHBoxLayout()
         self.slider_change_thresh = QSlider(Qt.Orientation.Horizontal)
-        self.slider_change_thresh.setRange(1, 30)
-        self.slider_change_thresh.setValue(8)
-        self.lbl_change_thresh_val = QLabel("8")
+        self.slider_change_thresh.setRange(1, 20)
+        self.slider_change_thresh.setValue(5)
+        self.lbl_change_thresh_val = QLabel("5")
         self.lbl_change_thresh_val.setFixedWidth(35)
         self.slider_change_thresh.valueChanged.connect(lambda v: self.lbl_change_thresh_val.setText(str(v)))
         thresh_box.addWidget(self.slider_change_thresh)
@@ -803,7 +813,6 @@ class MainWindow(QMainWindow):
                 selected_found = True
 
         if not selected_found and self.cmb_monitors.count() > 0:
-            # Default to monitor 2 if available (external display), else monitor 1
             def_idx = 0
             for i in range(self.cmb_monitors.count()):
                 if self.cmb_monitors.itemData(i) == 2:
@@ -870,7 +879,7 @@ class MainWindow(QMainWindow):
         self.slider_smoothing.setValue(smooth)
         self.lbl_smoothing_val.setText(f"{smooth/100:.2f}")
 
-        change_th = cp_cfg.get("change_threshold", 8)
+        change_th = cp_cfg.get("change_threshold", 5)
         self.slider_change_thresh.setValue(change_th)
         self.lbl_change_thresh_val.setText(str(change_th))
 
