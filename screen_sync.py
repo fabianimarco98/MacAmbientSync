@@ -43,7 +43,7 @@ logger = logging.getLogger("AmbientSync")
 DEFAULT_CONFIG = {
     "home_assistant": {
         "url": "http://192.168.1.100:8123",
-        "token": "INSERISCI_IL_TUO_LONG_LIVED_ACCESS_TOKEN",
+        "token": "INSERT_YOUR_LONG_LIVED_ACCESS_TOKEN",
         "entity_id": "light.your_rgb_lamp",
         "timeout": 2.0
     },
@@ -172,13 +172,13 @@ def get_available_monitors() -> list:
         with mss.mss() as sct:
             for idx, mon in enumerate(sct.monitors):
                 if idx == 0:
-                    name = f"🖥️ Tutti i Monitor Uniti ({mon['width']}x{mon['height']})"
+                    name = f"🖥️ All Monitors Combined ({mon['width']}x{mon['height']})"
                 else:
                     screen_name = qt_names[idx - 1] if idx - 1 < len(qt_names) else ""
                     if "Built-in" in screen_name or idx == 1:
-                        disp_desc = "Schermo Integrato Mac"
+                        disp_desc = "Built-in Mac Display"
                     else:
-                        disp_desc = f"Display Esterno ({screen_name})" if screen_name else f"Display Esterno {idx}"
+                        disp_desc = f"External Display ({screen_name})" if screen_name else f"External Display {idx}"
                     name = f"🖥️ Monitor {idx}: {disp_desc} ({mon['width']}x{mon['height']})"
 
                 monitors_list.append({
@@ -191,7 +191,7 @@ def get_available_monitors() -> list:
                 })
     except Exception as e:
         logger.error(f"Error enumerating monitors: {e}")
-        monitors_list.append({"index": 1, "name": "Monitor 1: Schermo Mac (1920x1080)", "width": 1920, "height": 1080})
+        monitors_list.append({"index": 1, "name": "Monitor 1: Built-in Display (1920x1080)", "width": 1920, "height": 1080})
 
     return monitors_list
 
@@ -330,9 +330,9 @@ class HomeAssistantClient:
     def test_connection(self) -> tuple[bool, str]:
         """Tests connection to Home Assistant API and verifies entity status."""
         if not self.url or "192.168.X.X" in self.url:
-            return False, "URL di Home Assistant non configurato."
+            return False, "Home Assistant URL is not configured."
         if not self.token or "INSERISCI" in self.token or "INSERT" in self.token:
-            return False, "Token di accesso non inserito."
+            return False, "Access token has not been entered."
         
         # 1. Check API root
         api_url = f"{self.url}/api/"
@@ -340,20 +340,20 @@ class HomeAssistantClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as resp:
                 if resp.status != 200:
-                    return False, f"Risposta inattesa da Home Assistant: HTTP {resp.status}"
+                    return False, f"Unexpected response from Home Assistant: HTTP {resp.status}"
                 data = json.loads(resp.read().decode("utf-8"))
                 message = data.get("message", "API OK")
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                return False, "Errore 401: Token non valido o scaduto."
-            return False, f"Errore HTTP {e.code}: {e.reason}"
+                return False, "Error 401: Invalid or expired token."
+            return False, f"HTTP Error {e.code}: {e.reason}"
         except urllib.error.URLError as e:
             err_reason = str(e.reason)
             if "timed out" in err_reason.lower():
-                return False, f"Timeout connessione verso {self.url}. Se usi una VPN (es. Cisco), disconnettila o consenti l'accesso alla rete locale."
-            return False, f"Impossibile raggiungere Home Assistant ({err_reason})."
+                return False, f"Connection timeout to {self.url}. If using a VPN (e.g. Cisco AnyConnect), disconnect it or allow local network traffic."
+            return False, f"Cannot reach Home Assistant ({err_reason})."
         except Exception as e:
-            return False, f"Errore di connessione: {e}"
+            return False, f"Connection error: {e}"
 
         # 2. Check Entity state
         if self.entity_id:
@@ -365,17 +365,17 @@ class HomeAssistantClient:
                         ent_data = json.loads(resp.read().decode("utf-8"))
                         friendly_name = ent_data.get("attributes", {}).get("friendly_name", self.entity_id)
                         state = ent_data.get("state", "unknown")
-                        return True, f"Connesso con successo! Entità '{friendly_name}' trovata (Stato: {state})."
+                        return True, f"Successfully connected! Entity '{friendly_name}' found (State: {state})."
                     else:
-                        return False, f"Entità '{self.entity_id}' non trovata (HTTP {resp.status})."
+                        return False, f"Entity '{self.entity_id}' not found (HTTP {resp.status})."
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return False, f"Entità '{self.entity_id}' non trovata su Home Assistant."
-                return True, f"API Connessa ({message}), ma errore entità: {e.reason}"
+                    return False, f"Entity '{self.entity_id}' not found on Home Assistant."
+                return True, f"API Connected ({message}), but entity error: {e.reason}"
             except Exception as e:
-                return True, f"API Connessa, ma errore lettura stato entità: {e}"
+                return True, f"API Connected, but error reading entity state: {e}"
 
-        return True, f"Connessione a Home Assistant riuscita ({message})."
+        return True, f"Connection to Home Assistant successful ({message})."
 
     def update_light(self, rgb_color, brightness, transition=0.3) -> tuple[bool, str]:
         """Sends light update to Home Assistant service."""
@@ -407,15 +407,15 @@ def main():
     ha_cfg = config["home_assistant"]
     
     if "INSERISCI" in ha_cfg.get("token", "") or "INSERT" in ha_cfg.get("token", ""):
-        logger.error("Token Home Assistant non configurato!")
-        logger.info(f"Modifica la configurazione in {get_config_path()}")
+        logger.error("Home Assistant token not configured!")
+        logger.info(f"Edit configuration in {get_config_path()}")
         sys.exit(1)
 
     logger.info("=====================================================")
     logger.info("  Mac Ambient Screen Sync -> Home Assistant CLI     ")
     logger.info(f"  Target: {ha_cfg['entity_id']} @ {ha_cfg['url']}")
     logger.info(f"  Sampling FPS: {config['capture']['fps']} Hz")
-    logger.info("  Premi CTRL+C per terminare la sincronizzazione.   ")
+    logger.info("  Press CTRL+C to stop synchronization.             ")
     logger.info("=====================================================")
 
     ha_client = HomeAssistantClient(ha_cfg)
@@ -432,7 +432,7 @@ def main():
 
     def handle_sigint(sig, frame):
         nonlocal running
-        logger.info("\nInterruzione richiesta... Chiusura in corso.")
+        logger.info("\nInterrupt requested... Shutting down.")
         running = False
 
     signal.signal(signal.SIGINT, handle_sigint)
@@ -455,18 +455,18 @@ def main():
                 if processor.should_update(rgb, brightness):
                     success, msg = ha_client.update_light(rgb, brightness, transition)
                     if success:
-                        logger.info(f"🎨 RGB: {rgb} | Luminosità: {brightness}/255")
+                        logger.info(f"🎨 RGB: {rgb} | Brightness: {brightness}/255")
                     else:
-                        logger.warning(f"Errore invio HA: {msg}")
+                        logger.warning(f"Error sending to HA: {msg}")
 
             except Exception as e:
-                logger.error(f"Errore ciclo di cattura: {e}")
+                logger.error(f"Capture loop error: {e}")
 
             elapsed = time.time() - start_time
             to_sleep = max(0.01, sleep_interval - elapsed)
             time.sleep(to_sleep)
 
-    logger.info("Sincronizzazione terminata.")
+    logger.info("Synchronization stopped.")
 
 
 if __name__ == "__main__":

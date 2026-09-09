@@ -1,7 +1,6 @@
 venv/
 __pycache__/
 *.pyc
-*.spec
 config.yaml
 .DS_Store
 build/

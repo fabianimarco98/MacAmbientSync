@@ -80,7 +80,7 @@ class SyncWorker(QThread):
         self.processor.reset()
         self.processor.force_next_update = True
 
-        self.log_emitted.emit("INFO", "Avvio cattura e sincronizzazione schermo...")
+        self.log_emitted.emit("INFO", "Starting screen capture and synchronization...")
 
         try:
             with mss.mss() as sct:
@@ -97,13 +97,13 @@ class SyncWorker(QThread):
                         # Select target monitor fixed by index
                         if monitor_idx == 0:
                             mon = sct.monitors[0]
-                            active_mon_name = "Tutti i Monitor"
+                            active_mon_name = "All Monitors"
                         elif monitor_idx < len(sct.monitors):
                             mon = sct.monitors[monitor_idx]
                             active_mon_name = f"Monitor {monitor_idx}"
                         else:
                             mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-                            active_mon_name = "Monitor Principale"
+                            active_mon_name = "Main Display"
 
                         # Grab screenshot
                         sct_img = sct.grab(mon)
@@ -125,16 +125,16 @@ class SyncWorker(QThread):
                             success, msg = self.ha_client.update_light(rgb, brightness, transition)
                             sent = True
                             if success:
-                                status_msg = "Inviato a Home Assistant"
-                                self.log_emitted.emit("INFO", f"🎨 Colore inviato: RGB{rgb} - Lum: {brightness}/255 ({active_mon_name})")
+                                status_msg = "Sent to Home Assistant"
+                                self.log_emitted.emit("INFO", f"🎨 Color sent: RGB{rgb} - Brightness: {brightness}/255 ({active_mon_name})")
                             else:
-                                status_msg = f"Errore HA: {msg}"
-                                self.log_emitted.emit("WARNING", f"Errore invio a Home Assistant: {msg}")
+                                status_msg = f"HA Error: {msg}"
+                                self.log_emitted.emit("WARNING", f"Error sending to Home Assistant: {msg}")
 
                         self.color_updated.emit(rgb, brightness, sent, status_msg, qimg_preview, active_mon_name)
 
                     except Exception as e:
-                        err_str = f"Errore nel loop di cattura: {e}"
+                        err_str = f"Error in capture loop: {e}"
                         self.log_emitted.emit("ERROR", err_str)
                         self.error_occurred.emit(str(e))
 
@@ -143,11 +143,11 @@ class SyncWorker(QThread):
                     time.sleep(to_sleep)
 
         except Exception as e:
-            self.log_emitted.emit("ERROR", f"Errore critico monitor/cattura: {e}")
+            self.log_emitted.emit("ERROR", f"Critical monitor/capture error: {e}")
             self.error_occurred.emit(str(e))
         finally:
             self.running = False
-            self.log_emitted.emit("INFO", "Sincronizzazione schermo interrotta.")
+            self.log_emitted.emit("INFO", "Screen synchronization stopped.")
 
 
 class MainWindow(QMainWindow):
@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
         has_perm = has_screen_capture_permission()
         if not has_perm:
             self.permission_banner.show()
-            self.append_log("WARNING", "⚠️ Permesso di Registrazione Schermo NON concesso! macOS nasconde le finestre e mostra solo lo sfondo.")
+            self.append_log("WARNING", "⚠️ Screen Recording permission NOT granted! macOS hides active windows and only shows desktop wallpaper.")
             request_screen_capture_permission()
         else:
             self.permission_banner.hide()
@@ -218,11 +218,11 @@ class MainWindow(QMainWindow):
         perm_layout = QHBoxLayout(self.permission_banner)
         perm_layout.setContentsMargins(12, 8, 12, 8)
         
-        lbl_perm = QLabel("⚠️ <b>Permesso Registrazione Schermo Mancante:</b> macOS sta bloccando le finestre e mostra solo lo sfondo viola.")
+        lbl_perm = QLabel("⚠️ <b>Screen Recording Permission Missing:</b> macOS is blocking windows and only showing the desktop wallpaper.")
         lbl_perm.setStyleSheet("color: #fde68a; font-size: 12px;")
         lbl_perm.setWordWrap(True)
         
-        btn_fix_perm = QPushButton("🔓 Abilita Permesso")
+        btn_fix_perm = QPushButton("🔓 Enable Permission")
         btn_fix_perm.setStyleSheet("background-color: #d97706; color: white; font-weight: bold; padding: 5px 12px;")
         btn_fix_perm.clicked.connect(self.open_mac_privacy_settings)
         
@@ -240,14 +240,14 @@ class MainWindow(QMainWindow):
 
         # Left: Big Start/Stop Button & State
         btn_box = QVBoxLayout()
-        self.btn_toggle_sync = QPushButton("▶  Avvia Sincronizzazione")
+        self.btn_toggle_sync = QPushButton("▶  Start Synchronization")
         self.btn_toggle_sync.setObjectName("BtnToggleSync")
         self.btn_toggle_sync.setMinimumHeight(48)
         self.btn_toggle_sync.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_toggle_sync.clicked.connect(self.toggle_sync)
         btn_box.addWidget(self.btn_toggle_sync)
 
-        self.lbl_status_badge = QLabel("⚪  Stato: Inattivo")
+        self.lbl_status_badge = QLabel("⚪  Status: Idle")
         self.lbl_status_badge.setObjectName("LblStatusBadge")
         btn_box.addWidget(self.lbl_status_badge)
         top_card_layout.addLayout(btn_box, 3)
@@ -255,12 +255,12 @@ class MainWindow(QMainWindow):
         # Center: Live Screen Capture Thumbnail
         thumb_box = QVBoxLayout()
         thumb_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_screen_thumb = QLabel("Anteprima Schermo")
+        self.lbl_screen_thumb = QLabel("Screen Preview")
         self.lbl_screen_thumb.setFixedSize(120, 68)
         self.lbl_screen_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_screen_thumb.setStyleSheet("background-color: #151518; border: 1px solid #444; border-radius: 6px; color: #666; font-size: 10px;")
         
-        self.lbl_thumb_title = QLabel("Cattura Attuale")
+        self.lbl_thumb_title = QLabel("Current Capture")
         self.lbl_thumb_title.setStyleSheet("color: #777; font-size: 10px;")
         self.lbl_thumb_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
@@ -283,9 +283,9 @@ class MainWindow(QMainWindow):
         self.lbl_color_rgb.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.lbl_color_hex = QLabel("HEX: #------")
         self.lbl_color_hex.setStyleSheet("color: #888; font-size: 12px; font-family: monospace;")
-        self.lbl_brightness_val = QLabel("Luminosità: --%")
+        self.lbl_brightness_val = QLabel("Brightness: --%")
         self.lbl_brightness_val.setStyleSheet("color: #aaa; font-size: 12px;")
-        self.lbl_ha_status = QLabel("Nessun dato inviato")
+        self.lbl_ha_status = QLabel("No data sent")
         self.lbl_ha_status.setStyleSheet("color: #666; font-size: 11px;")
 
         color_info_box.addWidget(self.lbl_color_rgb)
@@ -312,9 +312,9 @@ class MainWindow(QMainWindow):
         self.setup_logs_tab()
 
         self.tabs.addTab(self.tab_ha, "🏠 Home Assistant")
-        self.tabs.addTab(self.tab_capture, "🖥️ Schermo")
-        self.tabs.addTab(self.tab_colors, "🎨 Colore & Effetti")
-        self.tabs.addTab(self.tab_logs, "📋 Log & Attività")
+        self.tabs.addTab(self.tab_capture, "🖥️ Screen")
+        self.tabs.addTab(self.tab_colors, "🎨 Color & Effects")
+        self.tabs.addTab(self.tab_logs, "📋 Logs & Activity")
 
         main_layout.addWidget(self.tabs, 1)
 
@@ -322,14 +322,14 @@ class MainWindow(QMainWindow):
         bottom_bar = QHBoxLayout()
         bottom_bar.setContentsMargins(0, 0, 0, 0)
 
-        self.btn_reset_defaults = QPushButton("↺  Ripristina Predefiniti")
+        self.btn_reset_defaults = QPushButton("↺  Reset to Defaults")
         self.btn_reset_defaults.clicked.connect(self.reset_defaults)
 
-        self.btn_save_config = QPushButton("💾  Salva Configurazione")
+        self.btn_save_config = QPushButton("💾  Save Configuration")
         self.btn_save_config.setObjectName("BtnSave")
         self.btn_save_config.clicked.connect(self.save_current_settings)
 
-        self.btn_quit = QPushButton("✕  Chiudi ed Esci")
+        self.btn_quit = QPushButton("✕  Quit Application")
         self.btn_quit.setObjectName("BtnQuit")
         self.btn_quit.clicked.connect(self.close)
 
@@ -343,19 +343,19 @@ class MainWindow(QMainWindow):
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Pronto")
+        self.status_bar.showMessage("Ready")
 
     def setup_ha_tab(self):
         layout = QVBoxLayout(self.tab_ha)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
-        form_group = QGroupBox("Parametri di Connessione Home Assistant")
+        form_group = QGroupBox("Home Assistant Connection Parameters")
         form_layout = QGridLayout(form_group)
         form_layout.setSpacing(12)
 
         # Server URL
-        form_layout.addWidget(QLabel("URL Server:"), 0, 0)
+        form_layout.addWidget(QLabel("Server URL:"), 0, 0)
         self.txt_ha_url = QLineEdit()
         self.txt_ha_url.setPlaceholderText("http://192.168.1.100:8123")
         form_layout.addWidget(self.txt_ha_url, 0, 1)
@@ -365,23 +365,23 @@ class MainWindow(QMainWindow):
         token_box = QHBoxLayout()
         self.txt_ha_token = QLineEdit()
         self.txt_ha_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.txt_ha_token.setPlaceholderText("Long-Lived Access Token di Home Assistant")
+        self.txt_ha_token.setPlaceholderText("Home Assistant Long-Lived Access Token")
         self.btn_toggle_token = QPushButton("👁️")
         self.btn_toggle_token.setFixedWidth(36)
-        self.btn_toggle_token.setToolTip("Mostra / Nascondi Token")
+        self.btn_toggle_token.setToolTip("Show / Hide Token")
         self.btn_toggle_token.clicked.connect(self.toggle_token_visibility)
         token_box.addWidget(self.txt_ha_token)
         token_box.addWidget(self.btn_toggle_token)
         form_layout.addLayout(token_box, 1, 1)
 
         # Entity ID
-        form_layout.addWidget(QLabel("Entity ID Lampada:"), 2, 0)
+        form_layout.addWidget(QLabel("Light Entity ID:"), 2, 0)
         self.txt_ha_entity = QLineEdit()
         self.txt_ha_entity.setPlaceholderText("light.living_room_lamp")
         form_layout.addWidget(self.txt_ha_entity, 2, 1)
 
         # Timeout
-        form_layout.addWidget(QLabel("Timeout Richieste (s):"), 3, 0)
+        form_layout.addWidget(QLabel("Request Timeout (s):"), 3, 0)
         self.spin_ha_timeout = QDoubleSpinBox()
         self.spin_ha_timeout.setRange(0.2, 10.0)
         self.spin_ha_timeout.setSingleStep(0.1)
@@ -392,14 +392,14 @@ class MainWindow(QMainWindow):
 
         # Buttons row for Testing Connection and Testing Lamp Color
         actions_row = QHBoxLayout()
-        self.btn_test_conn = QPushButton("⚡  Verifica Connessione")
+        self.btn_test_conn = QPushButton("⚡  Test Connection")
         self.btn_test_conn.setObjectName("BtnTestConn")
         self.btn_test_conn.setMinimumHeight(36)
         self.btn_test_conn.clicked.connect(self.test_ha_connection)
 
-        self.btn_test_light = QPushButton("💡  Testa Luce (Invia Colore)")
+        self.btn_test_light = QPushButton("💡  Test Light (Send Color)")
         self.btn_test_light.setMinimumHeight(36)
-        self.btn_test_light.setToolTip("Invia un colore di test arancione alla lampada per verificare la risposta fisica")
+        self.btn_test_light.setToolTip("Send an orange test color to the light to verify physical response")
         self.btn_test_light.clicked.connect(self.send_test_color_to_lamp)
 
         actions_row.addWidget(self.btn_test_conn)
@@ -421,11 +421,11 @@ class MainWindow(QMainWindow):
         layout.setSpacing(14)
 
         # Monitor selector
-        mon_group = QGroupBox("Selezione Display e Prestazioni")
+        mon_group = QGroupBox("Display Selection & Performance")
         mon_layout = QGridLayout(mon_group)
         mon_layout.setSpacing(12)
 
-        mon_layout.addWidget(QLabel("Schermo Fisso da Catturare:"), 0, 0)
+        mon_layout.addWidget(QLabel("Target Display to Capture:"), 0, 0)
         mon_selector_box = QHBoxLayout()
         self.cmb_monitors = QComboBox()
         self.cmb_monitors.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -433,14 +433,14 @@ class MainWindow(QMainWindow):
         
         self.btn_refresh_monitors = QPushButton("🔄")
         self.btn_refresh_monitors.setFixedWidth(36)
-        self.btn_refresh_monitors.setToolTip("Rileva nuovamente i monitor collegati")
+        self.btn_refresh_monitors.setToolTip("Refresh connected displays")
         self.btn_refresh_monitors.clicked.connect(self.refresh_monitors)
         mon_selector_box.addWidget(self.cmb_monitors)
         mon_selector_box.addWidget(self.btn_refresh_monitors)
         mon_layout.addLayout(mon_selector_box, 0, 1)
 
         # FPS
-        mon_layout.addWidget(QLabel("Frequenza Campionamento (FPS):"), 1, 0)
+        mon_layout.addWidget(QLabel("Sampling Frequency (FPS):"), 1, 0)
         fps_box = QHBoxLayout()
         self.slider_fps = QSlider(Qt.Orientation.Horizontal)
         self.slider_fps.setRange(1, 15)
@@ -453,7 +453,7 @@ class MainWindow(QMainWindow):
         mon_layout.addLayout(fps_box, 1, 1)
 
         # Downsample dimensions
-        mon_layout.addWidget(QLabel("Dimensioni Campione (WxH):"), 2, 0)
+        mon_layout.addWidget(QLabel("Sample Dimensions (WxH):"), 2, 0)
         dim_box = QHBoxLayout()
         self.spin_sample_w = QSpinBox()
         self.spin_sample_w.setRange(16, 320)
@@ -471,14 +471,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(mon_group)
 
         # Letterbox removal group
-        lb_group = QGroupBox("Rilevamento Bande Nere (Film e Video)")
+        lb_group = QGroupBox("Black Bar Detection (Movies & Video)")
         lb_layout = QGridLayout(lb_group)
         lb_layout.setSpacing(12)
 
-        self.chk_ignore_black = QCheckBox("Ignora bande nere superiori e inferiori (Letterbox 21:9)")
+        self.chk_ignore_black = QCheckBox("Ignore top & bottom black bars (Letterbox 21:9)")
         lb_layout.addWidget(self.chk_ignore_black, 0, 0, 1, 2)
 
-        lb_layout.addWidget(QLabel("Soglia Rilevamento Nero:"), 1, 0)
+        lb_layout.addWidget(QLabel("Black Detection Threshold:"), 1, 0)
         thresh_box = QHBoxLayout()
         self.slider_black_thresh = QSlider(Qt.Orientation.Horizontal)
         self.slider_black_thresh.setRange(0, 60)
@@ -493,14 +493,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(lb_group)
 
         # Permissions helper
-        perm_group = QGroupBox("Permessi macOS")
+        perm_group = QGroupBox("macOS Permissions")
         perm_vbox = QVBoxLayout(perm_group)
-        perm_label = QLabel("Se macOS visualizza solo lo sfondo e non le finestre aperte, assicurati che <b>MacAmbientSync</b> sia autorizzata in <i>Impostazioni di Sistema → Privacy e Sicurezza → Registrazione Schermo</i>.")
+        perm_label = QLabel("If macOS displays only the desktop wallpaper and not active windows, ensure <b>MacAmbientSync</b> is granted permission in <i>System Settings → Privacy & Security → Screen Recording</i>.")
         perm_label.setWordWrap(True)
         perm_label.setStyleSheet("color: #aaa; font-size: 11px;")
         perm_vbox.addWidget(perm_label)
         
-        btn_open_perms = QPushButton("⚙️  Apri Preferenze Privacy e Sicurezza macOS")
+        btn_open_perms = QPushButton("⚙️  Open macOS Privacy & Security Settings")
         btn_open_perms.clicked.connect(self.open_mac_privacy_settings)
         perm_vbox.addWidget(btn_open_perms)
         layout.addWidget(perm_group)
@@ -512,12 +512,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
-        color_group = QGroupBox("Miglioramento ed Elaborazione Colore")
+        color_group = QGroupBox("Color Enhancement & Processing")
         cg_layout = QGridLayout(color_group)
         cg_layout.setSpacing(12)
 
         # Saturation boost
-        cg_layout.addWidget(QLabel("Boost Saturazione (Vivido):"), 0, 0)
+        cg_layout.addWidget(QLabel("Saturation Boost (Vivid):"), 0, 0)
         sat_box = QHBoxLayout()
         self.slider_sat = QSlider(Qt.Orientation.Horizontal)
         self.slider_sat.setRange(100, 250)
@@ -530,7 +530,7 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(sat_box, 0, 1)
 
         # Brightness boost
-        cg_layout.addWidget(QLabel("Boost Luminosità:"), 1, 0)
+        cg_layout.addWidget(QLabel("Brightness Boost:"), 1, 0)
         bright_box = QHBoxLayout()
         self.slider_bright_boost = QSlider(Qt.Orientation.Horizontal)
         self.slider_bright_boost.setRange(100, 200)
@@ -543,7 +543,7 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(bright_box, 1, 1)
 
         # Min Brightness
-        cg_layout.addWidget(QLabel("Luminosità Minima Lampada:"), 2, 0)
+        cg_layout.addWidget(QLabel("Minimum Light Brightness:"), 2, 0)
         min_b_box = QHBoxLayout()
         self.slider_min_bright = QSlider(Qt.Orientation.Horizontal)
         self.slider_min_bright.setRange(0, 100)
@@ -556,7 +556,7 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(min_b_box, 2, 1)
 
         # Max Brightness
-        cg_layout.addWidget(QLabel("Luminosità Massima Lampada:"), 3, 0)
+        cg_layout.addWidget(QLabel("Maximum Light Brightness:"), 3, 0)
         max_b_box = QHBoxLayout()
         self.slider_max_bright = QSlider(Qt.Orientation.Horizontal)
         self.slider_max_bright.setRange(100, 255)
@@ -569,7 +569,7 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(max_b_box, 3, 1)
 
         # Smoothing factor
-        cg_layout.addWidget(QLabel("Fluidità Transizioni (Smoothing):"), 4, 0)
+        cg_layout.addWidget(QLabel("Transition Smoothing (EMA):"), 4, 0)
         smooth_box = QHBoxLayout()
         self.slider_smoothing = QSlider(Qt.Orientation.Horizontal)
         self.slider_smoothing.setRange(5, 95)
@@ -582,7 +582,7 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(smooth_box, 4, 1)
 
         # Change threshold (sensitivity)
-        cg_layout.addWidget(QLabel("Soglia di Variazione (Sensibilità):"), 5, 0)
+        cg_layout.addWidget(QLabel("Change Threshold (Sensitivity):"), 5, 0)
         thresh_box = QHBoxLayout()
         self.slider_change_thresh = QSlider(Qt.Orientation.Horizontal)
         self.slider_change_thresh.setRange(1, 20)
@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
         cg_layout.addLayout(thresh_box, 5, 1)
 
         # HA Transition time
-        cg_layout.addWidget(QLabel("Tempo Transizione Home Assistant (s):"), 6, 0)
+        cg_layout.addWidget(QLabel("Home Assistant Transition Time (s):"), 6, 0)
         trans_box = QHBoxLayout()
         self.spin_transition = QDoubleSpinBox()
         self.spin_transition.setRange(0.0, 3.0)
@@ -619,10 +619,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.txt_logs, 1)
 
         log_actions = QHBoxLayout()
-        self.chk_autoscroll = QCheckBox("Scorrimento automatico")
+        self.chk_autoscroll = QCheckBox("Auto-scroll")
         self.chk_autoscroll.setChecked(True)
         
-        self.btn_clear_logs = QPushButton("🗑️  Pulisci Log")
+        self.btn_clear_logs = QPushButton("🗑️  Clear Logs")
         self.btn_clear_logs.clicked.connect(self.txt_logs.clear)
 
         log_actions.addWidget(self.chk_autoscroll)
@@ -921,26 +921,26 @@ class MainWindow(QMainWindow):
         """Saves current settings to disk and updates active worker."""
         self.config = self.get_settings_from_ui()
         if save_config(self.config):
-            self.append_log("INFO", "Configurazione salvata con successo.")
-            self.status_bar.showMessage("Configurazione salvata su disco", 3000)
+            self.append_log("INFO", "Configuration saved successfully.")
+            self.status_bar.showMessage("Configuration saved to disk", 3000)
             if self.worker and self.worker.isRunning():
                 self.worker.update_config(self.config)
         else:
-            self.append_log("ERROR", "Impossibile salvare la configurazione.")
-            QMessageBox.critical(self, "Errore", "Impossibile salvare la configurazione.")
+            self.append_log("ERROR", "Failed to save configuration.")
+            QMessageBox.critical(self, "Error", "Failed to save configuration.")
 
     def reset_defaults(self):
         """Resets all fields to default values."""
         reply = QMessageBox.question(
             self,
-            "Ripristina Predefiniti",
-            "Vuoi davvero ripristinare tutti i valori ai parametri predefiniti?",
+            "Reset to Defaults",
+            "Are you sure you want to reset all parameters to default values?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.config = DEFAULT_CONFIG.copy()
             self.load_settings_to_ui()
-            self.append_log("INFO", "Parametri reimpostati ai valori predefiniti.")
+            self.append_log("INFO", "Parameters reset to default values.")
 
     def toggle_token_visibility(self):
         if self.txt_ha_token.echoMode() == QLineEdit.EchoMode.Password:
@@ -960,7 +960,7 @@ class MainWindow(QMainWindow):
         }
 
         self.btn_test_conn.setEnabled(False)
-        self.btn_test_conn.setText("⏳ Verifica in corso...")
+        self.btn_test_conn.setText("⏳ Testing connection...")
         self.lbl_test_result.hide()
 
         self.test_worker = TestTaskWorker("test_conn", ha_cfg)
@@ -976,7 +976,7 @@ class MainWindow(QMainWindow):
             "timeout": self.spin_ha_timeout.value()
         }
         self.btn_test_light.setEnabled(False)
-        self.btn_test_light.setText("⏳ Invio...")
+        self.btn_test_light.setText("⏳ Sending...")
 
         self.test_worker = TestTaskWorker("test_light", ha_cfg)
         self.test_worker.test_finished.connect(self.on_test_task_finished)
@@ -986,26 +986,26 @@ class MainWindow(QMainWindow):
         """Safely called on the Qt Main UI thread upon task completion."""
         if task_type == "test_conn":
             self.btn_test_conn.setEnabled(True)
-            self.btn_test_conn.setText("⚡  Verifica Connessione")
+            self.btn_test_conn.setText("⚡  Test Connection")
             self.lbl_test_result.show()
             if ok:
                 self.lbl_test_result.setStyleSheet("background-color: #1e3d2f; color: #75f0a0; padding: 10px; border-radius: 6px; border: 1px solid #2e5d47;")
                 self.lbl_test_result.setText(f"✓ {msg}")
-                self.append_log("INFO", f"Test Connessione riuscito: {msg}")
+                self.append_log("INFO", f"Connection test succeeded: {msg}")
             else:
                 self.lbl_test_result.setStyleSheet("background-color: #3d1e1e; color: #f07575; padding: 10px; border-radius: 6px; border: 1px solid #5d2e2e;")
                 self.lbl_test_result.setText(f"✗ {msg}")
-                self.append_log("WARNING", f"Test Connessione fallito: {msg}")
+                self.append_log("WARNING", f"Connection test failed: {msg}")
 
         elif task_type == "test_light":
             self.btn_test_light.setEnabled(True)
-            self.btn_test_light.setText("💡  Testa Luce (Invia Colore)")
+            self.btn_test_light.setText("💡  Test Light (Send Color)")
             if ok:
-                self.append_log("INFO", "💡 Colore di test arancione inviato con successo alla lampada!")
-                self.status_bar.showMessage("Colore inviato alla lampada!", 4000)
+                self.append_log("INFO", "💡 Orange test color sent successfully to the light!")
+                self.status_bar.showMessage("Color sent to light!", 4000)
             else:
-                self.append_log("ERROR", f"Impossibile inviare colore alla lampada: {msg}")
-                QMessageBox.warning(self, "Errore Test Luce", f"Impossibile inviare colore alla lampada: {msg}")
+                self.append_log("ERROR", f"Failed to send color to light: {msg}")
+                QMessageBox.warning(self, "Light Test Error", f"Failed to send color to light: {msg}")
 
     def toggle_sync(self):
         """Starts or stops the screen sync worker."""
@@ -1021,8 +1021,8 @@ class MainWindow(QMainWindow):
         if not ha_cfg.get("token") or "INSERISCI" in ha_cfg.get("token") or "INSERT" in ha_cfg.get("token"):
             QMessageBox.warning(
                 self,
-                "Token Mancante",
-                "Inserisci il tuo Long-Lived Access Token di Home Assistant nella scheda 'Home Assistant' prima di avviare la sincronizzazione."
+                "Missing Token",
+                "Please enter your Home Assistant Long-Lived Access Token in the 'Home Assistant' tab before starting synchronization."
             )
             self.tabs.setCurrentIndex(0)
             return
@@ -1039,7 +1039,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
         # Update UI state
-        self.btn_toggle_sync.setText("⏹  Ferma Sincronizzazione")
+        self.btn_toggle_sync.setText("⏹  Stop Synchronization")
         self.btn_toggle_sync.setStyleSheet("""
             background-color: #d32f2f;
             color: white;
@@ -1050,9 +1050,9 @@ class MainWindow(QMainWindow):
             padding: 10px 18px;
         """)
         mon_idx = self.config["capture"]["monitor_index"]
-        self.lbl_status_badge.setText(f"🟢  In esecuzione (Monitor {mon_idx})")
+        self.lbl_status_badge.setText(f"🟢  Running (Monitor {mon_idx})")
         self.lbl_status_badge.setStyleSheet("color: #75f0a0; font-weight: bold;")
-        self.status_bar.showMessage("Sincronizzazione schermo attiva")
+        self.status_bar.showMessage("Screen synchronization active")
 
     def stop_sync(self, wait=False):
         """Stops the worker thread cleanly."""
@@ -1063,7 +1063,7 @@ class MainWindow(QMainWindow):
         self.on_worker_stopped()
 
     def on_worker_stopped(self):
-        self.btn_toggle_sync.setText("▶  Avvia Sincronizzazione")
+        self.btn_toggle_sync.setText("▶  Start Synchronization")
         self.btn_toggle_sync.setStyleSheet("""
             background-color: #28a745;
             color: white;
@@ -1073,10 +1073,10 @@ class MainWindow(QMainWindow):
             border-radius: 10px;
             padding: 10px 18px;
         """)
-        self.lbl_status_badge.setText("⚪  Stato: Inattivo")
+        self.lbl_status_badge.setText("⚪  Status: Idle")
         self.lbl_status_badge.setStyleSheet("color: #bbb; font-weight: normal;")
-        self.lbl_ha_status.setText("Sincronizzazione fermata")
-        self.status_bar.showMessage("Sincronizzazione fermata")
+        self.lbl_ha_status.setText("Synchronization stopped")
+        self.status_bar.showMessage("Synchronization stopped")
 
     def on_color_updated(self, rgb, brightness, sent, status_msg, qimg_preview, active_mon_name):
         """Updates color swatch, labels, and mini screen thumbnail."""
@@ -1088,7 +1088,7 @@ class MainWindow(QMainWindow):
         self.lbl_color_rgb.setText(f"RGB: {r}, {g}, {b}")
         self.lbl_color_hex.setText(f"HEX: {hex_code}")
         pct = int(round((brightness / 255.0) * 100))
-        self.lbl_brightness_val.setText(f"Luminosità: {pct}% ({brightness}/255)")
+        self.lbl_brightness_val.setText(f"Brightness: {pct}% ({brightness}/255)")
 
         # Update thumbnail preview and active monitor name
         if not qimg_preview.isNull():
@@ -1098,19 +1098,19 @@ class MainWindow(QMainWindow):
                 Qt.TransformationMode.SmoothTransformation
             )
             self.lbl_screen_thumb.setPixmap(pix)
-            self.lbl_thumb_title.setText(f"Cattura: {active_mon_name}")
+            self.lbl_thumb_title.setText(f"Capture: {active_mon_name}")
 
         if sent:
-            self.lbl_ha_status.setText("● Inviato a Home Assistant")
+            self.lbl_ha_status.setText("● Sent to Home Assistant")
             self.lbl_ha_status.setStyleSheet("color: #75f0a0; font-size: 11px;")
         elif status_msg:
             self.lbl_ha_status.setText(status_msg)
             self.lbl_ha_status.setStyleSheet("color: #f0a075; font-size: 11px;")
 
     def on_worker_error(self, err_msg):
-        self.lbl_status_badge.setText("🔴  Errore Sincronizzazione")
+        self.lbl_status_badge.setText("🔴  Sync Error")
         self.lbl_status_badge.setStyleSheet("color: #f07575; font-weight: bold;")
-        self.status_bar.showMessage(f"Errore: {err_msg}", 5000)
+        self.status_bar.showMessage(f"Error: {err_msg}", 5000)
 
     def append_log(self, level, message):
         """Appends log entry to log tab."""
@@ -1130,7 +1130,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Guarantees complete termination of the app when window is closed."""
-        self.append_log("INFO", "Chiusura dell'applicazione richiesta...")
+        self.append_log("INFO", "Application shutdown requested...")
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait(1000)
